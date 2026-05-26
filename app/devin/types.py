@@ -55,6 +55,10 @@ class SessionDetails:
     created_at: int | None = None
     updated_at: int | None = None
     title: str | None = None
+    # Validated structured output if the session was created with a schema.
+    # Devin only populates this once the session has progressed enough to
+    # produce one — None until then.
+    structured_output: dict | None = None
 
     @property
     def first_pr_url(self) -> str | None:
@@ -68,6 +72,7 @@ class SessionDetails:
             for p in (data.get("pull_requests") or [])
             if p.get("pr_url")
         ]
+        so = data.get("structured_output")
         return cls(
             devin_session_id=data["session_id"],
             status=map_status(raw_status),
@@ -77,6 +82,7 @@ class SessionDetails:
             pull_requests=prs,
             parent_session_id=data.get("parent_session_id"),
             child_session_ids=list(data.get("child_session_ids") or []),
+            structured_output=so if isinstance(so, dict) else None,
             created_at=data.get("created_at"),
             updated_at=data.get("updated_at"),
             title=data.get("title"),

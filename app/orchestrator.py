@@ -174,7 +174,32 @@ def poll_once() -> dict:
             ])
         if remote_so_json is not None:
             updates["structured_output_json"] = remote_so_json
-        if remote.status in db.TERMINAL_STATUSES and not row.completed_at:
+
+        # PR merge detection: if Devin's pr_state is 'merged', the work is
+        # functionally done — terminate the Devin session (saves ACUs from
+        # an idle-but-alive agent) and locally mark this row 'completed'
+        # regardless of what Devin's session status currently says. Same
+        # for 'closed' (PR closed without merging — treated as cancelled).
+        pr_state = (remote.pull_requests[0].pr_state
+                    if remote.pull_requests else None)
+        if pr_state == "merged" and row.status not in db.TERMINAL_STATUSES:
+            logger.info(
+                "PR merged on session %s; terminating Devin + marking completed",
+                row.devin_session_id,
+            )
+            try:
+                client.terminate_session(row.devin_session_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Terminate-on-merge failed for %s: %s",
+                               row.devin_session_id, exc)
+            updates["status"] = "completed"
+            updates["completed_at"] = _now_iso()
+            summary["merged"] = summary.get("merged", 0) + 1
+        elif pr_state == "closed" and row.status not in db.TERMINAL_STATUSES:
+            updates["status"] = "cancelled"
+            updates["error_message"] = "pr_closed_without_merge"
+            updates["completed_at"] = _now_iso()
+        elif remote.status in db.TERMINAL_STATUSES and not row.completed_at:
             updates["completed_at"] = _now_iso()
 
         db.sessions.update(row.id, **updates)
@@ -194,8 +219,9 @@ async def run_loop(stop_event: asyncio.Event) -> None:
     while not stop_event.is_set():
         try:
             summary = await asyncio.to_thread(poll_once)
-            if any(summary[k] for k in
-                   ("updated", "timed_out", "errors", "queue_dispatched")):
+            interesting = {"updated", "timed_out", "errors",
+                           "queue_dispatched", "merged"}
+            if any(summary.get(k) for k in interesting):
                 logger.info("Poll tick: %s", summary)
         except Exception:  # noqa: BLE001
             logger.exception("Poller tick crashed (continuing)")
