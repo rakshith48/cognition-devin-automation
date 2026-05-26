@@ -45,7 +45,10 @@ async def lifespan(_app: FastAPI):
             except asyncio.TimeoutError:
                 poller_task.cancel()
         devin.factory.reset()
-        logger.info("Devin client released on shutdown")
+        # GitHub client uses the same singleton pattern — release its sockets too.
+        from app import github_client
+        github_client.reset()
+        logger.info("Devin + GitHub clients released on shutdown")
 
 
 app = FastAPI(title="Devin Maintenance Orchestrator", lifespan=lifespan)

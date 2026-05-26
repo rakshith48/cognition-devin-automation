@@ -2,11 +2,12 @@
 
 Each handler follows the atomic-reservation pattern:
   1. Cheap safety checks (concurrency, daily cap)
-  2. try_reserve(work_key) — INSERT with UNIQUE constraint, atomic
-  3. Parse + validate inputs strictly (refuse on missing required fields)
-  4. Call Devin (only paid step)
-  5. activate(): UPDATE the reserved row with devin_session_id + prompt
-  6. On any failure between 2 and 5: mark the row failed (so it's visible
+  2. Per-handler precondition guards (Devin authorship, attempt cap, etc)
+  3. try_reserve(work_key) — INSERT with UNIQUE, atomic
+  4. Strict parse + validation: refuse rather than send Devin a malformed prompt
+  5. Devin create_session — the paid step
+  6. activate(): UPDATE the reserved row with devin_session_id + prompt
+  7. On any failure between 3-6: mark the row failed (so it's visible
      in the dashboard, not orphaned)
 
 The reservation row is the audit trail. Even a session that never made it
@@ -16,7 +17,7 @@ from __future__ import annotations
 
 import logging
 
-from app import db, devin, prompts, settings
+from app import db, devin, github_client, prompts, settings
 
 logger = logging.getLogger(__name__)
 
@@ -27,13 +28,15 @@ def _repo_full_name(issue: dict) -> str:
     repo = issue.get("repository") or {}
     if repo.get("full_name"):
         return repo["full_name"]
-    # On issue events, repo is at the payload root not inside issue;
-    # but the issue.repository_url field always works.
     url = issue.get("repository_url", "")
     if url.startswith("https://api.github.com/repos/"):
         return url.removeprefix("https://api.github.com/repos/")
     return settings.FORK_REPO
 
+
+# ============================================================================
+# handle_security_issue — the CVE flagship handler
+# ============================================================================
 
 def handle_security_issue(issue: dict) -> str:
     issue_url = issue.get("html_url", "")
@@ -41,13 +44,11 @@ def handle_security_issue(issue: dict) -> str:
     repo = _repo_full_name(issue)
     work_key = db.sessions.make_work_key(repo, issue_number, settings.SECURITY_LABEL)
 
-    # 1. Cheap safety rails — no row created yet, no I/O cost.
     if db.sessions.count_active() >= settings.MAX_CONCURRENT_SESSIONS:
         return f"skipped:concurrency_cap:{settings.MAX_CONCURRENT_SESSIONS}"
     if db.sessions.count_started_today() >= settings.MAX_SESSIONS_PER_DAY:
         return f"skipped:daily_cap:{settings.MAX_SESSIONS_PER_DAY}"
 
-    # 2. Atomic reservation — wins the race against concurrent webhooks.
     pk = db.sessions.try_reserve(
         work_key=work_key,
         trigger_type="cve_issue",
@@ -58,7 +59,6 @@ def handle_security_issue(issue: dict) -> str:
     if pk is None:
         return f"skipped:already_reserved:{work_key}"
 
-    # 3. Strict parsing — refuse rather than send Devin a malformed prompt.
     ctx = prompts.parse_issue_to_cve_context(issue)
     if ctx is None:
         db.sessions.mark_failed(pk, "not_a_cve_issue")
@@ -70,7 +70,6 @@ def handle_security_issue(issue: dict) -> str:
 
     prompt = prompts.build_cve_prompt(ctx, fork_url=settings.FORK_URL)
 
-    # 4. Paid call.
     try:
         client = devin.factory.get_client()
         created = client.create_session(
@@ -86,7 +85,6 @@ def handle_security_issue(issue: dict) -> str:
         db.sessions.mark_failed(pk, f"devin_create_failed:{type(exc).__name__}:{exc}")
         return f"error:devin_create_failed:{type(exc).__name__}"
 
-    # 5. Activate — promote reservation to pending with real Devin handle.
     db.sessions.update(
         pk,
         devin_session_id=created.devin_session_id,
@@ -101,6 +99,149 @@ def handle_security_issue(issue: dict) -> str:
     return f"created_session:{created.devin_session_id}"
 
 
+# ============================================================================
+# handle_ci_failure — closes the loop on Devin PRs whose CI fails
+# ============================================================================
+# This is the "Dependabot stops here, Devin keeps going" path. Every check
+# below is defensive: a single mis-routed event would burn ACUs on an
+# unrelated PR or worse, write into someone else's PR branch.
+# ============================================================================
+
+def handle_ci_failure(workflow_run: dict) -> str:
+    run_id = workflow_run.get("id")
+    repo_obj = workflow_run.get("repository") or {}
+    repo = repo_obj.get("full_name", settings.FORK_REPO)
+
+    # Guard 1: must be a PR-triggered workflow, not a push/schedule.
+    if workflow_run.get("event") != "pull_request":
+        return f"skipped:not_pr_triggered:{workflow_run.get('event')}"
+
+    # Guard 2: payload must reference a PR. (GH includes pull_requests[]
+    # array on PR-event workflow runs.)
+    pr_refs = workflow_run.get("pull_requests") or []
+    if not pr_refs:
+        return f"skipped:no_pr_in_payload:{run_id}"
+    pr_number = pr_refs[0].get("number")
+    if not pr_number:
+        return f"skipped:no_pr_number:{run_id}"
+
+    # Fetch PR for the rest of the guards. If this fails, we abort — no
+    # point spawning a fix without context.
+    try:
+        pr = github_client.get_pr(repo, pr_number)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("PR fetch failed: %s/%s", repo, pr_number)
+        return f"error:pr_fetch_failed:{type(exc).__name__}"
+    if pr is None:
+        return f"skipped:pr_not_found:{pr_number}"
+
+    pr_url = pr.get("html_url") or ""
+    head_ref = (pr.get("head") or {}).get("ref", "")
+
+    # Guard 3: only act on Devin branches. Belt + suspenders: we also
+    # verify a tracked session below, but the branch-name check stops us
+    # touching unrelated PRs before any DB lookup or API call.
+    if not head_ref.startswith("devin/"):
+        return f"skipped:not_devin_branch:{head_ref}"
+
+    # Guard 4: we must have a tracked parent session for this PR. If we
+    # don't, this isn't a session WE spawned — it's some other branch
+    # named devin/* by coincidence (or pre-existing state).
+    parent = db.sessions.find_by_pr(pr_url)
+    if parent is None:
+        return f"skipped:no_tracked_session_for_pr:{pr_number}"
+
+    # Guard 5: respect the loop cap. A PR that keeps failing after 3 fix
+    # attempts needs a human, not another autonomous run.
+    if parent.fix_attempt_number >= settings.MAX_FIX_ATTEMPTS:
+        return f"skipped:max_fix_attempts:{parent.fix_attempt_number}"
+
+    # Guard 6: don't fight a human. If someone pushed commits to the
+    # branch between Devin's last commit and now, hands off.
+    try:
+        commits = github_client.list_pr_commits(repo, pr_number)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("PR commits fetch failed: %s/%s", repo, pr_number)
+        return f"error:commits_fetch_failed:{type(exc).__name__}"
+    if github_client.has_non_devin_commits(commits):
+        return f"skipped:human_commits_on_branch:{pr_number}"
+
+    # Cheap rails before reservation.
+    if db.sessions.count_active() >= settings.MAX_CONCURRENT_SESSIONS:
+        return f"skipped:concurrency_cap:{settings.MAX_CONCURRENT_SESSIONS}"
+
+    # Guard 7: atomic dedupe by workflow_run.id. Webhook retries for the
+    # same run produce one session; a workflow RE-RUN produces a new
+    # run_id and gets a fresh session.
+    work_key = db.sessions.make_ci_fix_work_key(repo, run_id)
+    pk = db.sessions.try_reserve(
+        work_key=work_key,
+        trigger_type="ci_failure",
+        trigger_ref=pr_url,
+        issue_number=pr_number,
+        label=settings.CI_FIX_LABEL,
+        parent_devin_session_id=parent.devin_session_id,
+        fix_attempt_number=parent.fix_attempt_number + 1,
+    )
+    if pk is None:
+        return f"skipped:already_reserved:{work_key}"
+
+    # Fetch failing logs — best-effort; an empty tail just leaves Devin
+    # to discover the failure in CI itself.
+    try:
+        logs_tail = github_client.get_workflow_run_failing_job_logs(
+            repo, run_id, tail_lines=200,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Log fetch failed: %s", exc)
+        logs_tail = f"(could not fetch logs: {exc})"
+
+    ctx = prompts.CiFixContext(
+        pr_url=pr_url,
+        branch=head_ref,
+        workflow_name=workflow_run.get("name", "unknown"),
+        failure_logs_tail=logs_tail,
+        parent_prompt=parent.prompt_snapshot or "(parent prompt not preserved)",
+        attempt_number=parent.fix_attempt_number + 1,
+        max_attempts=settings.MAX_FIX_ATTEMPTS,
+    )
+    prompt = prompts.build_ci_fix_prompt(ctx)
+
+    try:
+        client = devin.factory.get_client()
+        created = client.create_session(
+            prompt=prompt,
+            repos=[settings.FORK_REPO],
+            title=f"CI fix attempt #{parent.fix_attempt_number + 1}: PR #{pr_number}",
+            tags=["ci-fix", str(parent.fix_attempt_number + 1)],
+            max_acu_limit=settings.DEVIN_MAX_ACU_PER_SESSION,
+            devin_mode=settings.DEVIN_MODE,
+            parent_session_id=parent.devin_session_id,   # Devin tracks the chain natively
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Devin create_session failed for CI fix on PR %s", pr_url)
+        db.sessions.mark_failed(pk, f"devin_create_failed:{type(exc).__name__}:{exc}")
+        return f"error:devin_create_failed:{type(exc).__name__}"
+
+    db.sessions.update(
+        pk,
+        devin_session_id=created.devin_session_id,
+        devin_url=created.devin_url,
+        prompt_snapshot=prompt,
+        status="pending",
+    )
+    logger.info(
+        "Spawned CI-fix session %s for PR #%d (attempt %d/%d, parent=%s)",
+        created.devin_session_id, pr_number, parent.fix_attempt_number + 1,
+        settings.MAX_FIX_ATTEMPTS, parent.devin_session_id,
+    )
+    return f"created_session:{created.devin_session_id}"
+
+
+# ============================================================================
+# Stubs for other sub-labels — kept so the dispatcher routes are real.
+# ============================================================================
+
 def handle_quality_issue(issue: dict) -> str:
     logger.info("TODO: quality-issue handler not yet implemented for %s", issue.get("html_url"))
     return f"stub:would_spawn_quality_session:{issue.get('number')}"
@@ -110,11 +251,3 @@ def handle_generic_remediation(issue: dict) -> str:
     logger.info("TODO: generic-remediation handler not yet implemented for %s",
                 issue.get("html_url"))
     return f"stub:would_spawn_generic_session:{issue.get('number')}"
-
-
-def handle_ci_failure(workflow_run: dict) -> str:
-    logger.info(
-        "TODO[Task#9]: would spawn CI-fix session for workflow_run id=%s",
-        workflow_run.get("id"),
-    )
-    return f"stub:would_spawn_ci_fix:{workflow_run.get('id')}"

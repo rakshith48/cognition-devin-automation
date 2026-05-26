@@ -71,6 +71,13 @@ def make_work_key(repo: str, issue_number: int | str, label: str) -> str:
     return f"issue:{repo}:{issue_number}:{label}"
 
 
+def make_ci_fix_work_key(repo: str, workflow_run_id: int) -> str:
+    """One fix attempt per workflow_run. A re-run of the workflow gets a
+    new run_id from GitHub, so a fresh fix-session can spawn for it; a
+    webhook redelivery of the same run gets the same id and is deduped."""
+    return f"ci_fix:{repo}:{workflow_run_id}"
+
+
 def try_reserve(
     *,
     work_key: str,

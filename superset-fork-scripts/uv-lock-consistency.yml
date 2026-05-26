@@ -1,0 +1,60 @@
+# Verifies that requirements/base.txt is in sync with pyproject.toml +
+# requirements/base.in. Fails if someone (Devin or otherwise) edits the
+# constraints without regenerating the lock — exactly the kind of mistake
+# the CVE-remediation prompt is designed to prevent, and a realistic CI
+# failure that the Devin Maintenance Orchestrator's ci-fix handler can
+# react to and self-heal.
+#
+# To force this to fail (for demo purposes): edit pyproject.toml or
+# requirements/base.in WITHOUT running `uv pip compile ... -o
+# requirements/base.txt`, push, watch the workflow_run.completed webhook
+# fire, watch the orchestrator spawn a child Devin session with
+# parent_session_id linked to the original.
+
+name: uv lock consistency
+
+on:
+  pull_request:
+    paths:
+      - "pyproject.toml"
+      - "requirements/**"
+      - ".github/workflows/uv-lock-consistency.yml"
+  push:
+    branches: [master]
+    paths:
+      - "pyproject.toml"
+      - "requirements/**"
+
+permissions:
+  contents: read
+
+jobs:
+  verify-lock:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"   # match Superset's runtime constraint
+
+      - name: Install uv
+        run: pip install --quiet "uv>=0.4"
+
+      - name: Regenerate base.txt to a temp file
+        run: |
+          uv pip compile pyproject.toml requirements/base.in \
+            -o /tmp/base.regenerated.txt \
+            --quiet
+          echo "Regenerated lock written to /tmp/base.regenerated.txt"
+
+      - name: Diff against committed base.txt
+        run: |
+          if diff -u requirements/base.txt /tmp/base.regenerated.txt; then
+            echo "✓ requirements/base.txt is consistent with the source files"
+          else
+            echo ""
+            echo "::error::requirements/base.txt is OUT OF SYNC with pyproject.toml + requirements/base.in"
+            echo "Run: uv pip compile pyproject.toml requirements/base.in -o requirements/base.txt"
+            exit 1
+          fi
