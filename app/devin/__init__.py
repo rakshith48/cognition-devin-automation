@@ -1,4 +1,5 @@
 """Devin v3 API integration. Public surface for the rest of the app."""
+from app.devin import factory
 from app.devin.client import DevinClient, HttpDevinClient
 from app.devin.http import DevinTransport
 from app.devin.types import (
@@ -10,6 +11,7 @@ from app.devin.types import (
 )
 
 __all__ = [
+    "factory",
     "DevinClient",
     "HttpDevinClient",
     "DevinTransport",
