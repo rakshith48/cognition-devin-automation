@@ -85,3 +85,15 @@ class HttpDevinClient:
                 logger.info("Session %s already terminated", session_id)
                 return
             raise
+
+    def healthcheck(self) -> bool:
+        """Cheap auth-and-reachability probe — hits the session list endpoint
+        with limit=1. Returns True iff we get 2xx, meaning the token can read
+        this org's sessions. NB: hitting GET /sessions/<fake-id> would 403 even
+        with valid creds (Devin returns 403 for unknown IDs to prevent
+        enumeration), so the list endpoint is the right probe."""
+        try:
+            self._t.request("GET", "/sessions", params={"limit": 1})
+            return True
+        except Exception:  # noqa: BLE001
+            return False
