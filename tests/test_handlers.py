@@ -110,14 +110,17 @@ def test_missing_fix_version_skips_before_devin(stub_devin):
     assert len(stub_devin.calls) == 0, "Must not call Devin with missing fields"
 
 
-def test_concurrency_cap_blocks_extra_sessions(stub_devin, monkeypatch):
-    """When MAX_CONCURRENT is reached, no new session even with valid input."""
+def test_concurrency_cap_queues_extra_sessions(stub_devin, monkeypatch):
+    """When MAX_CONCURRENT is reached, the event is QUEUED (not skipped) —
+    the poller's drain_queue will retry it when capacity frees. No new
+    Devin call until then."""
     from app import handlers, settings
     monkeypatch.setattr(settings, "MAX_CONCURRENT_SESSIONS", 1)
     handlers.handle_security_issue(_cve_issue(number=1))
     res = handlers.handle_security_issue(_cve_issue(number=2))
-    assert res == "skipped:concurrency_cap:1"
-    assert len(stub_devin.calls) == 1
+    assert res.startswith("queued:concurrency_cap:"), res
+    assert "issue:owner/repo:2:devin-security" in res
+    assert len(stub_devin.calls) == 1, "No new Devin call while capped"
 
 
 def test_devin_failure_marks_reservation_failed(stub_devin_failing):

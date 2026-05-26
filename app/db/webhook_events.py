@@ -34,3 +34,16 @@ def get(delivery_id: str) -> sqlite3.Row | None:
     with conn() as c:
         cur = c.execute("SELECT * FROM webhook_events WHERE delivery_id = ?", (delivery_id,))
         return cur.fetchone()
+
+
+def list_queued(limit: int = 50) -> list[sqlite3.Row]:
+    """Return webhook_events whose last handler result was 'queued:*',
+    oldest first. The orchestrator retries these from poll_once."""
+    with conn() as c:
+        cur = c.execute(
+            "SELECT * FROM webhook_events "
+            "WHERE handler_result LIKE 'queued:%' "
+            "ORDER BY received_at ASC LIMIT ?",
+            (limit,),
+        )
+        return cur.fetchall()

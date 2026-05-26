@@ -46,15 +46,56 @@ def _seconds_since(iso_or_sqlite: str) -> float:
     return (datetime.now(UTC) - dt).total_seconds()
 
 
+def drain_queue() -> dict:
+    """Re-dispatch any events that were queued because of the concurrency
+    cap, up to current available capacity. A control plane should never
+    drop valid work silently — queued events keep their place in
+    webhook_events and get retried every poll tick until they succeed or
+    the daily cap kicks them out.
+    """
+    # Local import avoids the orchestrator→dispatcher→handlers→devin
+    # import cycle that would otherwise form at module load.
+    from app import dispatcher
+
+    summary = {"queue_seen": 0, "queue_retried": 0, "queue_dispatched": 0}
+    capacity = settings.MAX_CONCURRENT_SESSIONS - db.sessions.count_active()
+    if capacity <= 0:
+        return summary
+
+    queued = db.webhook_events.list_queued(limit=capacity)
+    summary["queue_seen"] = len(queued)
+    for row in queued:
+        payload = json.loads(row["payload_json"])
+        try:
+            new_result = dispatcher.dispatch(
+                row["event_type"], row["action"], payload
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("Queue retry crashed for delivery %s", row["delivery_id"])
+            continue
+        summary["queue_retried"] += 1
+        if not new_result.startswith("queued:"):
+            db.webhook_events.mark_processed(row["delivery_id"], new_result)
+            summary["queue_dispatched"] += 1
+            logger.info(
+                "Queue drained delivery=%s → %s", row["delivery_id"], new_result
+            )
+    return summary
+
+
 def poll_once() -> dict:
     """Sync — runs one tick. Returns a small summary dict for logging.
 
-    Pure-by-effects: every output (status update, timeout) is a DB write or
-    a Devin call; no in-memory state survives between ticks.
+    Pure-by-effects: every output (status update, timeout, queue drain) is
+    a DB write or a Devin call; no in-memory state survives between ticks.
     """
+    # Drain queued work FIRST so freed-up capacity goes to the longest
+    # waiter, not opportunistically to whatever Devin happens to complete.
+    summary = drain_queue()
+    summary.update({"polled": 0, "updated": 0, "timed_out": 0, "errors": 0})
+
     client = devin.factory.get_client()
     rows = db.sessions.list_non_terminal()
-    summary = {"polled": 0, "updated": 0, "timed_out": 0, "errors": 0}
 
     for row in rows:
         # 'reserving' rows have no Devin handle yet — skip; the handler
@@ -153,7 +194,8 @@ async def run_loop(stop_event: asyncio.Event) -> None:
     while not stop_event.is_set():
         try:
             summary = await asyncio.to_thread(poll_once)
-            if summary["updated"] or summary["timed_out"] or summary["errors"]:
+            if any(summary[k] for k in
+                   ("updated", "timed_out", "errors", "queue_dispatched")):
                 logger.info("Poll tick: %s", summary)
         except Exception:  # noqa: BLE001
             logger.exception("Poller tick crashed (continuing)")

@@ -114,8 +114,12 @@ def handle_security_issue(issue: dict) -> str:
     work_key = db.sessions.make_work_key(repo, issue_number, settings.SECURITY_LABEL)
 
     if db.sessions.count_active() >= settings.MAX_CONCURRENT_SESSIONS:
-        return f"skipped:concurrency_cap:{settings.MAX_CONCURRENT_SESSIONS}"
+        # Queue instead of drop: the poller will retry on the next tick.
+        # Concurrency cap is transient (active sessions complete); dropping
+        # would silently lose real work.
+        return f"queued:concurrency_cap:{work_key}"
     if db.sessions.count_started_today() >= settings.MAX_SESSIONS_PER_DAY:
+        # Daily cap is intentional throttle, NOT queue — reset at midnight.
         return f"skipped:daily_cap:{settings.MAX_SESSIONS_PER_DAY}"
 
     pk = db.sessions.try_reserve(
