@@ -92,16 +92,12 @@ gh issue create --repo <you>/superset \
   --label "devin-remediate,devin-security" \
   --body "$(cat scripts/example-issue-body.md)"
 
-# Then either: (a) wait for the webhook (next section), or (b) hit the handler
-# directly to test without ngrok:
-docker compose exec api python -c "
-import json, subprocess
-from app import dispatcher
-issue = json.loads(subprocess.check_output(['gh','api','repos/<you>/superset/issues/1']))
-print(dispatcher.dispatch('issues', 'opened', {'action':'opened', 'issue': issue}))
-"
-# → created_session:<devin-id>
-# Open http://localhost:8502 to watch it progress.
+# Then either: (a) wait for the webhook (next section), or (b) simulate the
+# webhook locally without ngrok. The simulator fetches the real issue from
+# GitHub and POSTs a signed webhook to your local /webhook/github:
+.venv/bin/python scripts/simulate_issue.py 1
+# 200 {"status":"accepted","delivery_id":"sim-1-1748000000"}
+# Open http://localhost:8502 to watch the session progress live.
 ```
 
 ### 6. Wire up the webhook for live demos
@@ -152,7 +148,7 @@ cognition-devin-automation/
 │       ├── metrics.py       /metrics + /sessions
 │       └── admin.py         /admin/{replay,reset} — gated by token
 ├── dashboard/
-│   └── app.py               Streamlit — hero, sessions table, throughput
+│   └── streamlit_app.py     Streamlit — hero, sessions table, throughput
 ├── scripts/
 │   ├── scan_osv.py          OSV vulnerability scan
 │   └── file_issues.py       (Task #11) GH Action → issues
@@ -264,7 +260,7 @@ curl -s -X POST http://localhost:8000/admin/replay/<delivery-id> \
 
 ```bash
 .venv/bin/python -m pytest tests/ -v
-# 46 passed in 0.23s
+# 59 passed in 0.34s
 ```
 
 Coverage focus: the boundaries that prevent wasted money and false reporting.
