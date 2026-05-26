@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# State / runtime
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# Env
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+.DS_Store
+
+# Superset fork lives as its own repo; tracked separately
+superset-fork/
+
+# Scratch
+/tmp_*
