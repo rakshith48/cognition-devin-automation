@@ -12,7 +12,7 @@ from typing import Any
 
 from app.db.connection import conn
 
-ACTIVE_STATUSES = frozenset({"pending", "running", "blocked"})
+ACTIVE_STATUSES = frozenset({"pending", "running", "blocked", "needs_attention"})
 TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled", "timeout"})
 
 # Columns allowed in update() — explicit allow-list defeats accidental SQL injection

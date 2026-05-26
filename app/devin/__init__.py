@@ -5,9 +5,11 @@ from app.devin.http import DevinTransport
 from app.devin.types import (
     STATUS_MAP,
     TERMINAL_STATUSES,
+    UNKNOWN_STATUS,
     PullRequestRef,
     SessionCreated,
     SessionDetails,
+    map_status,
 )
 
 __all__ = [
@@ -20,4 +22,6 @@ __all__ = [
     "PullRequestRef",
     "STATUS_MAP",
     "TERMINAL_STATUSES",
+    "UNKNOWN_STATUS",
+    "map_status",
 ]

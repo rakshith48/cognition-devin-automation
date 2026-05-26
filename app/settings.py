@@ -52,6 +52,12 @@ SECURITY_LABEL = "devin-security"
 QUALITY_LABEL = "devin-quality"
 CI_FIX_LABEL = "devin-ci-fix"
 
+# ---------- Admin endpoints ----------
+# Two-layer defense: routes only mount if enabled, AND each call requires a token.
+# In production both should be off unless an operator is actively using them.
+ENABLE_ADMIN_ROUTES = os.environ.get("ENABLE_ADMIN_ROUTES", "false").lower() == "true"
+ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "")
+
 
 def validate_for_runtime() -> list[str]:
     """Return list of misconfiguration messages. Empty list = OK."""

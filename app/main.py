@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app import db, settings
+from app import db, devin, settings
 from app.routes import admin, health, metrics, webhook
 
 logging.basicConfig(
@@ -21,11 +21,20 @@ async def lifespan(_app: FastAPI):
     db.init_db()
     for problem in settings.validate_for_runtime():
         logger.warning("Config issue: %s", problem)
-    yield
+    if settings.ENABLE_ADMIN_ROUTES and not settings.ADMIN_TOKEN:
+        logger.error("ENABLE_ADMIN_ROUTES=true but ADMIN_TOKEN is empty — routes will 503")
+    try:
+        yield
+    finally:
+        # Release the Devin HTTP client's socket pool on shutdown.
+        devin.factory.reset()
+        logger.info("Devin client released on shutdown")
 
 
 app = FastAPI(title="Devin Maintenance Orchestrator", lifespan=lifespan)
 app.include_router(health.router)
 app.include_router(webhook.router)
 app.include_router(metrics.router)
-app.include_router(admin.router)
+if settings.ENABLE_ADMIN_ROUTES:
+    app.include_router(admin.router)
+    logger.info("Admin routes mounted (ENABLE_ADMIN_ROUTES=true)")

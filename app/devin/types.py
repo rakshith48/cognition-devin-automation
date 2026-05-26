@@ -18,7 +18,16 @@ STATUS_MAP: dict[str, str] = {
     "resuming": "running",
 }
 
+# Sentinel for a Devin status we don't recognize — kept ACTIVE so the poller
+# keeps surfacing it and the dashboard flags it for human attention, rather
+# than silently dropping a session if Devin adds a new status enum.
+UNKNOWN_STATUS = "needs_attention"
+
 TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled", "timeout"})
+
+
+def map_status(raw: str) -> str:
+    return STATUS_MAP.get(raw, UNKNOWN_STATUS)
 
 
 @dataclass(frozen=True)
@@ -61,7 +70,7 @@ class SessionDetails:
         ]
         return cls(
             devin_session_id=data["session_id"],
-            status=STATUS_MAP.get(raw_status, "unknown"),
+            status=map_status(raw_status),
             raw_status=raw_status,
             status_detail=data.get("status_detail"),
             acus_consumed=float(data.get("acus_consumed") or 0),
