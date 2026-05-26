@@ -76,12 +76,18 @@ class HttpDevinClient:
         )
 
     def terminate_session(self, session_id: str) -> None:
+        """Stop a running session. Uses ?archive=true so the session is
+        preserved (not destroyed) for post-mortem inspection.
+
+        Idempotent on the "already done" cases — calling on a finished
+        session is a no-op as far as we're concerned."""
         try:
             self._t.request(
-                "POST", "/sessions/archive", json={"session_ids": [session_id]}
+                "DELETE", f"/sessions/{session_id}", params={"archive": "true"}
             )
         except RuntimeError as e:
-            if any(s in str(e).lower() for s in ("already", "exited", "archived")):
+            msg = str(e).lower()
+            if any(s in msg for s in ("already", "exited", "archived", "finished")):
                 logger.info("Session %s already terminated", session_id)
                 return
             raise
