@@ -33,7 +33,7 @@ if str(_root) not in sys.path:
 import pandas as pd  # noqa: E402
 import streamlit as st  # noqa: E402
 
-from app import db, metrics, settings  # noqa: E402
+from app import db, metrics, settings, stage  # noqa: E402
 
 st.set_page_config(
     page_title="Devin Maintenance Orchestrator",
@@ -162,9 +162,9 @@ def live_section():
 
     if visible:
         df = pd.DataFrame([{
+            "Stage":    stage.stage_label(stage.compute_stage(r, rows)),
             "Status":   status_label(r.status),
             "Trigger":  r.trigger_type,
-            "Label":    r.label or "—",
             "Issue":    r.trigger_ref or "",
             "Devin":    r.devin_url or "",
             "PR":       r.pr_url or "",
@@ -178,6 +178,7 @@ def live_section():
             use_container_width=True,
             hide_index=True,
             column_config={
+                "Stage":  st.column_config.TextColumn("Stage", width="medium"),
                 "Status": st.column_config.TextColumn("Status", width="small"),
                 "Issue":  st.column_config.LinkColumn("Issue", display_text=r"#(\d+)"),
                 "Devin":  st.column_config.LinkColumn("Devin", display_text="open"),
