@@ -103,12 +103,18 @@ def poll_once() -> dict:
                 summary["timed_out"] += 1
                 continue
 
-        # Diff-aware update: only write if something changed.
+        # Diff-aware update: only write if something changed. Includes
+        # structured_output so we pick it up when Devin first produces it.
+        remote_so_json = (
+            json.dumps(remote.structured_output, sort_keys=True)
+            if remote.structured_output else None
+        )
         changed = (
             remote.status != row.status
             or remote.raw_status != row.raw_status
             or remote.first_pr_url != row.pr_url
             or float(remote.acus_consumed) != float(row.acus_consumed or 0)
+            or remote_so_json != row.structured_output_json
         )
         if not changed:
             db.sessions.update(row.id, last_polled_at=_now_iso())
@@ -125,6 +131,8 @@ def poll_once() -> dict:
             updates["pr_urls_json"] = json.dumps([
                 {"pr_url": p.pr_url, "pr_state": p.pr_state} for p in remote.pull_requests
             ])
+        if remote_so_json is not None:
+            updates["structured_output_json"] = remote_so_json
         if remote.status in db.TERMINAL_STATUSES and not row.completed_at:
             updates["completed_at"] = _now_iso()
 

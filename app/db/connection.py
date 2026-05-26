@@ -197,7 +197,8 @@ def init_db() -> None:
             completed_at            TIMESTAMP,
             last_polled_at          TIMESTAMP,
             error_message           TEXT,
-            fix_attempt_number      INTEGER NOT NULL DEFAULT 0
+            fix_attempt_number      INTEGER NOT NULL DEFAULT 0,
+            structured_output_json  TEXT
         );
 
         CREATE INDEX IF NOT EXISTS idx_sessions_status      ON sessions(status);
@@ -229,6 +230,12 @@ def init_db() -> None:
         # M3: unique index on work_key (built after backfill + rebuild so no
         # constraint trips). IF NOT EXISTS handles re-runs.
         c.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_sessions_work_key ON sessions(work_key)")
+
+        # M4: structured_output_json column. Holds Devin's validated
+        # structured_output (CVE_REMEDIATION_SCHEMA shape).
+        if not _column_exists(c, "sessions", "structured_output_json"):
+            logger.info("Migration: adding sessions.structured_output_json column")
+            c.execute("ALTER TABLE sessions ADD COLUMN structured_output_json TEXT")
 
 
 def healthcheck() -> bool:

@@ -161,6 +161,12 @@ def live_section():
         visible = [r for r in visible if r.label in label_filter]
 
     if visible:
+        import json as _json
+        # Parse structured_output once per row so the table columns + the
+        # detail expander below see consistent data.
+        parsed_so = {r.id: _json.loads(r.structured_output_json)
+                     for r in visible if r.structured_output_json}
+
         df = pd.DataFrame([{
             "Stage":    stage.stage_label(stage.compute_stage(r, rows)),
             "Status":   status_label(r.status),
@@ -168,6 +174,8 @@ def live_section():
             "Issue":    r.trigger_ref or "",
             "Devin":    r.devin_url or "",
             "PR":       r.pr_url or "",
+            "Summary":  (parsed_so.get(r.id, {}).get("summary") or "—")[:80],
+            "Risk":     parsed_so.get(r.id, {}).get("risk_level") or "—",
             "ACUs":     f"{r.acus_consumed:.2f}" if r.acus_consumed else "—",
             "Duration": fmt_duration(r.started_at, r.completed_at, r.status),
             "Started":  r.started_at,
@@ -178,13 +186,48 @@ def live_section():
             use_container_width=True,
             hide_index=True,
             column_config={
-                "Stage":  st.column_config.TextColumn("Stage", width="medium"),
-                "Status": st.column_config.TextColumn("Status", width="small"),
-                "Issue":  st.column_config.LinkColumn("Issue", display_text=r"#(\d+)"),
-                "Devin":  st.column_config.LinkColumn("Devin", display_text="open"),
-                "PR":     st.column_config.LinkColumn("PR", display_text="open"),
+                "Stage":   st.column_config.TextColumn("Stage", width="medium"),
+                "Status":  st.column_config.TextColumn("Status", width="small"),
+                "Issue":   st.column_config.LinkColumn("Issue", display_text=r"#(\d+)"),
+                "Devin":   st.column_config.LinkColumn("Devin", display_text="open"),
+                "PR":      st.column_config.LinkColumn("PR", display_text="open"),
+                "Summary": st.column_config.TextColumn("Summary", width="large"),
+                "Risk":    st.column_config.TextColumn("Risk", width="small"),
             },
         )
+
+        # Per-session full remediation report — only shown for sessions that
+        # actually produced structured output (so the section vanishes for
+        # in-flight or report-less sessions).
+        sessions_with_reports = [r for r in visible if r.id in parsed_so]
+        if sessions_with_reports:
+            st.subheader("Remediation reports")
+            for r in sessions_with_reports:
+                report = parsed_so[r.id]
+                pr_link = f" → [PR]({r.pr_url})" if r.pr_url else ""
+                with st.expander(
+                    f"#{r.issue_number or r.id} — {report.get('summary', '(no summary)')}{pr_link}",
+                    expanded=False,
+                ):
+                    a, b, c = st.columns(3)
+                    a.metric("Risk",
+                             (report.get("risk_level") or "?").upper())
+                    b.metric("Tests run", "✓" if report.get("tests_run") else "✗")
+                    c.metric("Tests passing", "✓" if report.get("tests_passing") else "✗")
+                    if report.get("needs_human_review"):
+                        st.warning(
+                            ":exclamation: Devin flagged this PR for "
+                            "additional human review."
+                        )
+                    files = report.get("files_changed") or []
+                    if files:
+                        st.markdown("**Files changed:**")
+                        st.code("\n".join(files), language="text")
+                    blockers = report.get("blockers") or []
+                    if blockers:
+                        st.markdown("**Blockers:**")
+                        for blk in blockers:
+                            st.markdown(f"- {blk}")
     else:
         st.info("No sessions yet. File a GitHub issue with labels "
                 "`devin-remediate` + `devin-security`.")

@@ -148,6 +148,10 @@ def handle_security_issue(issue: dict) -> str:
             tags=["cve", ctx.severity.lower(), ctx.package],
             max_acu_limit=settings.DEVIN_MAX_ACU_PER_SESSION,
             devin_mode=settings.DEVIN_MODE,
+            # Force Devin to produce a validated remediation report so the
+            # dashboard can show summary, risk, tests, blockers — not just
+            # 'session completed.'
+            structured_output_schema=prompts.CVE_REMEDIATION_SCHEMA,
         )
     except Exception as exc:  # noqa: BLE001
         logger.exception("Devin create_session failed for issue %s", issue_url)

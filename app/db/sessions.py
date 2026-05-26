@@ -31,6 +31,7 @@ _UPDATABLE_COLUMNS = frozenset({
     "status", "raw_status", "pr_url", "pr_urls_json", "acus_consumed",
     "completed_at", "last_polled_at", "error_message", "parent_devin_session_id",
     "devin_session_id", "devin_url", "prompt_snapshot",
+    "structured_output_json",
 })
 
 
@@ -56,6 +57,7 @@ class SessionRow:
     last_polled_at: str | None
     error_message: str | None
     fix_attempt_number: int
+    structured_output_json: str | None = None
 
     @classmethod
     def from_row(cls, r: sqlite3.Row) -> SessionRow:

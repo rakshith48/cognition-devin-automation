@@ -26,6 +26,7 @@ class DevinClient(Protocol):
         max_acu_limit: int | None = None,
         devin_mode: str | None = None,
         parent_session_id: str | None = None,
+        structured_output_schema: dict | None = None,
     ) -> SessionCreated: ...
 
     def get_session(self, session_id: str) -> SessionDetails: ...
@@ -47,6 +48,7 @@ class HttpDevinClient:
         max_acu_limit: int | None = None,
         devin_mode: str | None = None,
         parent_session_id: str | None = None,
+        structured_output_schema: dict | None = None,
     ) -> SessionCreated:
         body: dict = {"prompt": prompt}
         if repos:
@@ -61,6 +63,8 @@ class HttpDevinClient:
             body["devin_mode"] = devin_mode
         if parent_session_id:
             body["parent_session_id"] = parent_session_id
+        if structured_output_schema:
+            body["structured_output_schema"] = structured_output_schema
         data = self._t.request("POST", "/sessions", json=body).json()
         return SessionCreated(
             devin_session_id=data["session_id"], devin_url=data["url"]

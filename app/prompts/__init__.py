@@ -1,6 +1,7 @@
 """Devin prompts. Pure builders — one prompt type per module."""
 from app.prompts.ci_fix import CiFixContext, build_ci_fix_prompt
 from app.prompts.cve import CveContext, build_cve_prompt, cve_id_slug, parse_issue_to_cve_context
+from app.prompts.structured import CVE_REMEDIATION_SCHEMA
 
 __all__ = [
     "CveContext",
@@ -9,4 +10,5 @@ __all__ = [
     "parse_issue_to_cve_context",
     "CiFixContext",
     "build_ci_fix_prompt",
+    "CVE_REMEDIATION_SCHEMA",
 ]
