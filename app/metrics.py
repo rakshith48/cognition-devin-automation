@@ -1,39 +1,78 @@
 """Metrics aggregation — pure functions over SessionRow lists.
 
-Kept separate from HTTP and DB so the aggregation logic is testable in
-isolation: hand it a list, get a dict back. Also lets the Streamlit
-dashboard reuse the exact same shape without going through HTTP.
+Buckets are deliberately granular so the dashboard can answer the VP-of-Eng
+question "is this actually working?" honestly. "Devin exited" is not the
+same as "PR was opened" is not the same as "PR is mergeable."
+
+What we DON'T track yet (out of scope for this iteration):
+  - ci_green: whether the PR's CI is passing. Would require a second polling
+    loop against GitHub. Called out in the architecture walkthrough as the
+    natural next addition.
 """
 from __future__ import annotations
 
 from app import db, settings
 
+# Statuses we treat as "human needs to look at this."
+NEEDS_HUMAN_STATUSES = frozenset({"blocked", "needs_attention", "timeout"})
+
 
 def compute_dashboard_metrics(rows: list[db.SessionRow]) -> dict:
+    # Lifecycle buckets — every row falls in exactly one of these counts.
+    total = len(rows)
     active = sum(1 for r in rows if r.status in db.ACTIVE_STATUSES)
     completed = sum(1 for r in rows if r.status == "completed")
     failed = sum(1 for r in rows if r.status == "failed")
-    prs = sum(1 for r in rows if r.pr_url)
-    total_acus = sum((r.acus_consumed or 0) for r in rows)
-    terminal = sum(1 for r in rows if r.status in db.TERMINAL_STATUSES)
-    success_rate = (completed / terminal) if terminal else 0.0
-    hours_saved = completed * settings.HOURS_SAVED_PER_COMPLETED_SESSION
+    cancelled = sum(1 for r in rows if r.status == "cancelled")
+    needs_human = sum(1 for r in rows if r.status in NEEDS_HUMAN_STATUSES)
 
+    # Output buckets — what work product came out.
+    pr_created = sum(1 for r in rows if r.pr_url)
+    # "Devin said done, but no PR" — usually a no-op or a "couldn't proceed"
+    # finish that the dashboard should flag.
+    completed_without_pr = sum(
+        1 for r in rows if r.status == "completed" and not r.pr_url
+    )
+
+    # Cost.
+    total_acus = sum((r.acus_consumed or 0) for r in rows)
+
+    # Honest success rate: only PR-producing completions count as success.
+    # Denominator is sessions that have reached a terminal state.
+    terminal = sum(1 for r in rows if r.status in db.TERMINAL_STATUSES)
+    success_rate = (pr_created / terminal) if terminal else 0.0
+
+    # Engineering value (calibrated estimate; see settings for the constants).
+    hours_saved = pr_created * settings.HOURS_SAVED_PER_COMPLETED_SESSION
+
+    # Per-label breakdown so the dashboard can show "5 security, 2 quality."
     by_label: dict[str, int] = {}
     for r in rows:
         if r.label:
             by_label[r.label] = by_label.get(r.label, 0) + 1
 
     return {
+        # Lifecycle
+        "total_sessions": total,
         "active_sessions": active,
         "completed_sessions": completed,
         "failed_sessions": failed,
-        "total_sessions": len(rows),
-        "prs_opened": prs,
-        "success_rate": round(success_rate, 3),
+        "cancelled_sessions": cancelled,
+        "needs_human": needs_human,
+
+        # Outputs (the bucket that actually matters for the pitch)
+        "pr_created": pr_created,
+        "completed_without_pr": completed_without_pr,
+
+        # Cost
         "total_acus_consumed": round(total_acus, 2),
+
+        # Headline ratios + derived value
+        "success_rate": round(success_rate, 3),  # pr_created / terminal
         "estimated_hours_saved": hours_saved,
         "estimated_dollars_saved": int(hours_saved * settings.ENGINEER_HOURLY_RATE_USD),
+
+        # Slices
         "by_label": by_label,
         "last_activity_at": rows[0].started_at if rows else None,
     }
