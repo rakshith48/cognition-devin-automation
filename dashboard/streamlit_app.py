@@ -1,5 +1,10 @@
 """Streamlit dashboard for the Devin Maintenance Orchestrator.
 
+Filename note: this file is `streamlit_app.py`, NOT `app.py`. Streamlit
+imports its target under the filename's stem as a module — calling it
+`app.py` would register it as `app` and shadow our `app/` package on
+`from app import db`. The rename avoids the conflict.
+
 Reads directly from the SQLite DB the orchestrator writes to. The Streamlit
 service mounts the same volume as the API service in docker-compose, so
 the dashboard always reflects ground truth without an HTTP roundtrip.

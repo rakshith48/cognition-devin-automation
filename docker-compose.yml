@@ -48,7 +48,7 @@ services:
     ports:
       - "8502:8501"
     command: >
-      streamlit run dashboard/app.py
+      streamlit run dashboard/streamlit_app.py
       --server.headless true
       --server.port 8501
       --server.address 0.0.0.0
