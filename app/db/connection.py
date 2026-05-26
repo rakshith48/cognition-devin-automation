@@ -48,6 +48,65 @@ def _column_is_not_null(c: sqlite3.Connection, table: str, column: str) -> bool:
     return False
 
 
+def _backfill_missing_work_keys(c: sqlite3.Connection) -> None:
+    """Assign work_key to pre-existing rows that have none.
+
+    Computes the same canonical form (`issue:<repo>:<num>:<label>`) that
+    handlers produce via make_work_key, by parsing owner/repo/number out
+    of the issue URL stored in trigger_ref.
+
+    Collision-aware: if two historical rows resolve to the same canonical
+    key (a real possibility with debug-era duplicates), the oldest row
+    keeps the canonical slot and later rows get `:dup:<id>` suffixed.
+    Without this guard, CREATE UNIQUE INDEX below would crash startup
+    on any DB that ever had a duplicate issue/label row.
+    """
+    import re
+
+    rows = c.execute(
+        "SELECT id, trigger_ref, issue_number, label FROM sessions "
+        "WHERE work_key IS NULL OR work_key = '' "
+        "ORDER BY id ASC"   # oldest wins the canonical slot
+    ).fetchall()
+    if not rows:
+        return
+
+    # Seed with work_keys already assigned to non-backfill rows so we
+    # don't collide with them either.
+    existing = {
+        r[0] for r in c.execute(
+            "SELECT work_key FROM sessions "
+            "WHERE work_key IS NOT NULL AND work_key != ''"
+        ).fetchall()
+    }
+
+    pat = re.compile(r"github\.com/([^/]+/[^/]+)/issues/(\d+)")
+    for r in rows:
+        repo = None
+        number = r["issue_number"]
+        m = pat.search(r["trigger_ref"] or "")
+        if m:
+            repo = m.group(1)
+            if number is None:
+                number = int(m.group(2))
+        if repo and number is not None and r["label"]:
+            canonical = f"issue:{repo}:{number}:{r['label']}"
+        else:
+            canonical = f"legacy:{r['id']}"
+
+        if canonical in existing:
+            wk = f"{canonical}:dup:{r['id']}"
+            logger.warning(
+                "Migration: work_key collision on '%s' — row pk=%s renamed to '%s'",
+                canonical, r["id"], wk,
+            )
+        else:
+            wk = canonical
+        existing.add(wk)
+        c.execute("UPDATE sessions SET work_key = ? WHERE id = ?", (wk, r["id"]))
+        logger.info("Backfilled work_key for session pk=%s: %s", r["id"], wk)
+
+
 def _rebuild_sessions_table(c: sqlite3.Connection) -> None:
     """SQLite has no ALTER COLUMN. To relax NOT NULL constraints on
     devin_session_id/devin_url/prompt_snapshot (required for the reservation
@@ -154,17 +213,11 @@ def init_db() -> None:
             logger.info("Migration: adding sessions.work_key column")
             c.execute("ALTER TABLE sessions ADD COLUMN work_key TEXT")
 
-        # Backfill work_key on any rows missing it. Uses issue URL + label so
-        # the value is stable across re-runs (and matches what new code generates
-        # when called with the same trigger_ref + label).
-        c.execute("""
-            UPDATE sessions
-            SET work_key = COALESCE(
-                'issue:' || trigger_ref || ':' || COALESCE(label, 'unknown'),
-                devin_session_id
-            )
-            WHERE work_key IS NULL OR work_key = ''
-        """)
+        # Backfill in Python so we can (a) parse owner/repo+number out of
+        # the issue URL to match what handlers compute via make_work_key,
+        # and (b) collision-detect to keep CREATE UNIQUE INDEX from
+        # tripping on historical duplicates (e.g. debug-era rows).
+        _backfill_missing_work_keys(c)
 
         # M2: relax NOT NULL constraints if we're on the original schema —
         # the reservation pattern needs to insert before we have a Devin

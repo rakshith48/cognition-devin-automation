@@ -58,6 +58,19 @@ CI_FIX_LABEL = "devin-ci-fix"
 ENABLE_ADMIN_ROUTES = os.environ.get("ENABLE_ADMIN_ROUTES", "false").lower() == "true"
 ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "")
 
+# ---------- Devin commit identity ----------
+# The github_client.has_non_devin_commits guard skips the CI-fix loop when
+# any non-Devin author/committer has pushed to the PR branch. The set of
+# logins that count as Devin depends on which app slug is installed —
+# default covers the public devin-ai integration; configure when running
+# against an enterprise install with a different slug.
+DEVIN_BOT_LOGINS = frozenset(
+    s.strip() for s in os.environ.get(
+        "DEVIN_BOT_LOGINS",
+        "devin-ai-integration[bot],devin-ai[bot],devin[bot]",
+    ).split(",") if s.strip()
+)
+
 
 def validate_for_runtime() -> list[str]:
     """Return list of misconfiguration messages. Empty list = OK."""

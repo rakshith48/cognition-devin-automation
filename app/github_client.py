@@ -21,15 +21,6 @@ logger = logging.getLogger(__name__)
 
 _GITHUB_API = "https://api.github.com"
 
-# Logins that indicate a commit was made by Devin's GitHub App (as opposed
-# to a human pushing to the branch). The literal bot login depends on the
-# Devin App configuration; default covers the public app.
-DEVIN_COMMITTERS = frozenset({
-    "devin-ai-integration[bot]",
-    "devin-ai[bot]",
-    "devin[bot]",
-})
-
 
 _client: httpx.Client | None = None
 _lock = threading.Lock()
@@ -81,19 +72,27 @@ def list_pr_commits(repo: str, number: int) -> list[dict]:
     return resp.json()
 
 
-def has_non_devin_commits(commits: list[dict]) -> bool:
+def has_non_devin_commits(
+    commits: list[dict], devin_logins: frozenset[str] | None = None
+) -> bool:
     """Heuristic: a commit counts as 'human' if its committer login isn't
     a known Devin bot identity. GitHub's commit object exposes both
     `author` and `committer` GitHub users; we check committer because
-    that's who actually pushed the change."""
+    that's who actually pushed the change. The author falls back to
+    catching commits where committer is null (e.g. web edits).
+
+    The bot login set is configurable via DEVIN_BOT_LOGINS so operators
+    on enterprise installs with a different app slug can extend it
+    without code changes. This is a third-layer defense — the branch
+    name prefix and tracked-parent-session checks happen first.
+    """
+    allowed = devin_logins if devin_logins is not None else settings.DEVIN_BOT_LOGINS
     for c in commits:
         committer = (c.get("committer") or {}).get("login")
         author = (c.get("author") or {}).get("login")
-        # Either author or committer being non-Devin (and non-null) means
-        # someone other than the bot touched this branch.
-        if committer and committer not in DEVIN_COMMITTERS:
+        if committer and committer not in allowed:
             return True
-        if author and author not in DEVIN_COMMITTERS:
+        if author and author not in allowed:
             return True
     return False
 

@@ -149,17 +149,64 @@ def test_no_tracked_session_skipped(stub_devin, stub_github):
 
 
 def test_max_fix_attempts_skipped(stub_devin, stub_github):
-    """Three strikes: a human takes over after fix_attempt 3."""
-    from app import handlers, settings
+    """Three strikes: a human takes over after fix_attempt 3.
+
+    Seeds a child session at the cap (not the parent — parent fix_attempt
+    is always 0). The chain query MAX(fix_attempt_number) across parent
+    + children should return the cap, and the handler should skip."""
+    from app import db, handlers, settings
     pr_url = "https://x/owner/repo/pull/42"
     stub_github["pr"] = {"html_url": pr_url, "head": {"ref": "devin/cve-x"}}
     stub_github["commits"] = [
         {"committer": {"login": "devin-ai-integration[bot]"}, "author": {}},
     ]
-    _seed_parent_session("owner/repo", pr_url, fix_attempt=settings.MAX_FIX_ATTEMPTS)
+    parent_pk = _seed_parent_session("owner/repo", pr_url, devin_id="devin-parent-cap")
+    # Simulate that MAX_FIX_ATTEMPTS child fix-sessions have already run.
+    db.sessions.try_reserve(
+        work_key="ci_fix:owner/repo:88",  # arbitrary historical run id
+        trigger_type="ci_failure",
+        trigger_ref=pr_url,
+        issue_number=42,
+        label="devin-ci-fix",
+        parent_devin_session_id="devin-parent-cap",
+        fix_attempt_number=settings.MAX_FIX_ATTEMPTS,
+    )
     res = handlers.handle_ci_failure(_wf_run())
     assert res.startswith("skipped:max_fix_attempts")
     assert len(stub_devin.calls) == 0
+
+
+def test_fix_attempt_counter_walks_the_chain(stub_devin, stub_github):
+    """Regression: multiple CI failures on the same PR must increment
+    fix_attempt_number across the chain, not stay at 1 forever.
+
+    The original bug: handler used parent.fix_attempt_number + 1, but
+    parent never gets incremented (only children do), so every fresh
+    workflow_run.id past the first spawned another attempt-1 child."""
+    from app import db, handlers
+    pr_url = "https://x/owner/repo/pull/42"
+    stub_github["pr"] = {"html_url": pr_url, "head": {"ref": "devin/cve-x"}}
+    stub_github["commits"] = [
+        {"committer": {"login": "devin-ai-integration[bot]"}, "author": {}},
+    ]
+    _seed_parent_session("owner/repo", pr_url, devin_id="devin-parent-chain")
+
+    # Three distinct workflow_run.ids → three distinct child sessions.
+    assert handlers.handle_ci_failure(_wf_run(run_id=1001)).startswith("created_session")
+    assert handlers.handle_ci_failure(_wf_run(run_id=1002)).startswith("created_session")
+    assert handlers.handle_ci_failure(_wf_run(run_id=1003)).startswith("created_session")
+
+    children = sorted(
+        (r for r in db.sessions.list_recent() if r.trigger_type == "ci_failure"),
+        key=lambda r: r.fix_attempt_number,
+    )
+    assert [c.fix_attempt_number for c in children] == [1, 2, 3], \
+        f"Expected 1,2,3 — got {[c.fix_attempt_number for c in children]}"
+
+    # The 4th failure must be blocked by the cap.
+    res = handlers.handle_ci_failure(_wf_run(run_id=1004))
+    assert res == "skipped:max_fix_attempts:3"
+    assert len(stub_devin.calls) == 3, "No new Devin call on the 4th failure"
 
 
 def test_human_commits_skipped(stub_devin, stub_github):

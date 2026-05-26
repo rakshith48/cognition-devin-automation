@@ -182,6 +182,24 @@ def find_by_pr(pr_url: str) -> SessionRow | None:
         return SessionRow.from_row(r) if r else None
 
 
+def max_fix_attempt_for_parent(parent_devin_session_id: str) -> int:
+    """Return the highest fix_attempt_number across the parent's chain
+    (the parent itself plus any child fix-sessions it spawned). Used to
+    enforce MAX_FIX_ATTEMPTS correctly across multiple CI failures.
+
+    Without this, the CI-fix handler would re-read the parent row each
+    time and see fix_attempt_number=0 (since only children get it
+    incremented) — so the cap would never trip past attempt 1.
+    """
+    with conn() as c:
+        cur = c.execute(
+            "SELECT COALESCE(MAX(fix_attempt_number), 0) FROM sessions "
+            "WHERE devin_session_id = ? OR parent_devin_session_id = ?",
+            (parent_devin_session_id, parent_devin_session_id),
+        )
+        return cur.fetchone()[0]
+
+
 def list_recent(limit: int = 100) -> list[SessionRow]:
     with conn() as c:
         cur = c.execute(

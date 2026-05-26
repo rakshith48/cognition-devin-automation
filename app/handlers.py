@@ -151,10 +151,15 @@ def handle_ci_failure(workflow_run: dict) -> str:
     if parent is None:
         return f"skipped:no_tracked_session_for_pr:{pr_number}"
 
-    # Guard 5: respect the loop cap. A PR that keeps failing after 3 fix
-    # attempts needs a human, not another autonomous run.
-    if parent.fix_attempt_number >= settings.MAX_FIX_ATTEMPTS:
-        return f"skipped:max_fix_attempts:{parent.fix_attempt_number}"
+    # Guard 5: respect the loop cap. A PR that keeps failing after N fix
+    # attempts needs a human, not another autonomous run. Query the chain
+    # (parent + all its children) for the highest attempt seen, NOT just
+    # the parent's row — parent never gets fix_attempt incremented, so
+    # using it directly would let attempts past 1 run indefinitely.
+    current_max = db.sessions.max_fix_attempt_for_parent(parent.devin_session_id)
+    if current_max >= settings.MAX_FIX_ATTEMPTS:
+        return f"skipped:max_fix_attempts:{current_max}"
+    next_attempt = current_max + 1
 
     # Guard 6: don't fight a human. If someone pushed commits to the
     # branch between Devin's last commit and now, hands off.
@@ -181,7 +186,7 @@ def handle_ci_failure(workflow_run: dict) -> str:
         issue_number=pr_number,
         label=settings.CI_FIX_LABEL,
         parent_devin_session_id=parent.devin_session_id,
-        fix_attempt_number=parent.fix_attempt_number + 1,
+        fix_attempt_number=next_attempt,
     )
     if pk is None:
         return f"skipped:already_reserved:{work_key}"
@@ -202,7 +207,7 @@ def handle_ci_failure(workflow_run: dict) -> str:
         workflow_name=workflow_run.get("name", "unknown"),
         failure_logs_tail=logs_tail,
         parent_prompt=parent.prompt_snapshot or "(parent prompt not preserved)",
-        attempt_number=parent.fix_attempt_number + 1,
+        attempt_number=next_attempt,
         max_attempts=settings.MAX_FIX_ATTEMPTS,
     )
     prompt = prompts.build_ci_fix_prompt(ctx)
@@ -212,8 +217,8 @@ def handle_ci_failure(workflow_run: dict) -> str:
         created = client.create_session(
             prompt=prompt,
             repos=[settings.FORK_REPO],
-            title=f"CI fix attempt #{parent.fix_attempt_number + 1}: PR #{pr_number}",
-            tags=["ci-fix", str(parent.fix_attempt_number + 1)],
+            title=f"CI fix attempt #{next_attempt}: PR #{pr_number}",
+            tags=["ci-fix", str(next_attempt)],
             max_acu_limit=settings.DEVIN_MAX_ACU_PER_SESSION,
             devin_mode=settings.DEVIN_MODE,
             parent_session_id=parent.devin_session_id,   # Devin tracks the chain natively
@@ -232,7 +237,7 @@ def handle_ci_failure(workflow_run: dict) -> str:
     )
     logger.info(
         "Spawned CI-fix session %s for PR #%d (attempt %d/%d, parent=%s)",
-        created.devin_session_id, pr_number, parent.fix_attempt_number + 1,
+        created.devin_session_id, pr_number, next_attempt,
         settings.MAX_FIX_ATTEMPTS, parent.devin_session_id,
     )
     return f"created_session:{created.devin_session_id}"
