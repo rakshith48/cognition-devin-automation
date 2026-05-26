@@ -107,8 +107,9 @@ with st.sidebar:
 
 st.title(":shield: Devin Maintenance Orchestrator")
 st.caption(
-    "Event-driven control plane that routes GitHub maintenance work to Devin. "
-    "Dependabot stops when CI fails — Devin closes the loop."
+    "Event-driven remediation control plane for dependency vulnerabilities. "
+    "Detects vulnerable packages → opens issues → assigns Devin → "
+    "watches PRs → reacts to CI failures (capped) → reports to engineering leadership."
 )
 
 

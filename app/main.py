@@ -51,7 +51,11 @@ async def lifespan(_app: FastAPI):
         logger.info("Devin + GitHub clients released on shutdown")
 
 
-app = FastAPI(title="Devin Maintenance Orchestrator", lifespan=lifespan)
+app = FastAPI(
+    title="Devin Maintenance Orchestrator",
+    description="Event-driven remediation control plane for dependency vulnerabilities.",
+    lifespan=lifespan,
+)
 app.include_router(health.router)
 app.include_router(webhook.router)
 app.include_router(metrics.router)

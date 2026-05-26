@@ -1,10 +1,12 @@
 # Devin Maintenance Orchestrator
 
-> Event-driven control plane that routes GitHub maintenance work to Devin and turns it into reviewed, tested PRs — autonomously.
+> **An event-driven remediation control plane for dependency vulnerabilities in large repos.**
 >
-> **Dependabot stops when CI fails. Devin closes the loop.**
+> It detects vulnerable packages, opens GitHub issues, assigns Devin bounded remediation tasks, watches for PRs, reacts to CI failures with capped follow-up sessions, and reports progress / cost / success to engineering leadership.
+>
+> *Dependabot stops at the PR. Devin closes the loop.*
 
-A take-home for Cognition. Built as the kind of system a Deployment Engineer would hand to a Stripe or Ramp VP of Engineering to prove out Devin as production infrastructure rather than a chatbot.
+A take-home for Cognition. Built as the kind of system a Deployment Engineer would hand to a Stripe or Ramp VP of Engineering to prove out Devin as production infrastructure — not as a chatbot, not as a script runner, as the *control plane* that turns one class of recurring engineering toil into a managed, observable pipeline.
 
 [`PLAN.md`](./PLAN.md) — first-principles design doc. [`CVE_SELECTION.md`](./CVE_SELECTION.md) — which CVEs the demo targets and why.
 
