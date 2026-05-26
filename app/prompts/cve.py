@@ -147,10 +147,10 @@ YOUR TASK:
    the smallest possible change. Do not refactor.
 5. Open a pull request against `master` with:
    - Title: "fix(security): upgrade {ctx.package} to {ctx.fix_version} ({ctx.cve_id})"
-     (Conventional-commits format is REQUIRED — Superset's PR Lint enforces
-     the regex `^(build|chore|ci|docs|feat|fix|perf|refactor|style|test|other)(\\(.+\\))?(\\!)?:\\s.+`.
-     The `fix(security):` prefix matches; "Security:" or other freeform
-     prefixes will fail lint.)
+     (Conventional-commits format is REQUIRED — Superset's PR Lint
+     enforces it. The `fix(security):` prefix matches the
+     `^(fix|feat|chore|...)(\\(scope\\))?:` regex; freeform prefixes
+     like "Security:" will fail lint.)
    - Description: link to the source issue ({ctx.issue_url}), summary of
      changes, and the test results.
    - Reference issue #{ctx.issue_number} so it auto-closes on merge.

@@ -228,7 +228,17 @@ def handle_ci_failure(workflow_run: dict) -> str:
     if parent is None:
         return f"skipped:no_tracked_session_for_pr:{pr_number}"
 
-    # Guard 5: respect the loop cap. A PR that keeps failing after N fix
+    # Guard 5: don't double-up with Devin's own CI-watch loop. Every Devin
+    # CVE session has 'Wait for CI checks and fix any failures' in its own
+    # task list — while the parent session is still alive, IT owns CI
+    # fixing. Spawning a child here would race the parent on the same
+    # branch (concurrent pushes, wasted ACUs). Our handler is the
+    # FALLBACK: only fires once the parent session has exited and CI is
+    # still failing.
+    if parent.status not in db.TERMINAL_STATUSES:
+        return f"skipped:parent_still_active:{parent.status}"
+
+    # Guard 6: respect the loop cap. A PR that keeps failing after N fix
     # attempts needs a human, not another autonomous run. Query the chain
     # (parent + all its children) for the highest attempt seen, NOT just
     # the parent's row — parent never gets fix_attempt incremented, so

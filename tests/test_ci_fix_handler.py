@@ -152,6 +152,29 @@ def test_no_tracked_session_skipped(stub_devin, stub_github):
     assert len(stub_devin.calls) == 0
 
 
+def test_active_parent_skipped(stub_devin, stub_github):
+    """If Devin's parent session is still alive, IT owns CI fixing.
+    Our handler is the FALLBACK — only fires after the parent exits.
+    Spawning during the parent's lifetime would race it on the same
+    branch with concurrent pushes."""
+    from app import db, handlers
+    pr_url = "https://x/owner/repo/pull/42"
+    stub_github["pr"] = {"html_url": pr_url, "head": {"ref": "devin/cve-x"}}
+    stub_github["commits"] = [
+        {"committer": {"login": "devin-ai-integration[bot]"}, "author": {}},
+    ]
+    # Seed parent in a NON-terminal state (Devin's session is still alive,
+    # watching CI itself).
+    parent_pk = _seed_parent_session("owner/repo", pr_url, devin_id="devin-parent-alive")
+    db.sessions.update(parent_pk, status="running")
+
+    res = handlers.handle_ci_failure(_wf_run())
+    assert res == "skipped:parent_still_active:running", res
+    assert len(stub_devin.calls) == 0, (
+        "Must not spawn a child while parent is alive — would race the parent"
+    )
+
+
 def test_max_fix_attempts_escalates_to_human(stub_devin, stub_github):
     """When MAX_FIX_ATTEMPTS hits, the handler MUST:
       1. Mark the parent CVE session as 'needs_attention' (visible in
