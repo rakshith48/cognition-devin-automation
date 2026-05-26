@@ -14,6 +14,9 @@ dependencies = [
 dashboard = [
     "streamlit>=1.40",
     "pandas>=2.2",
+    # In-place rerun without a full browser reload — avoids the flicker
+    # that meta-refresh causes.
+    "streamlit-autorefresh>=1.0",
 ]
 dev = [
     "ruff>=0.7",

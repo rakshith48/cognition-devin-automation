@@ -14,7 +14,8 @@ Three sections, top to bottom:
   2. Live sessions table — every work unit with drill-down links
   3. Throughput chart — sessions over time, stacked by status
 
-Auto-refreshes every 5s during demo (configurable in the sidebar).
+Auto-refreshes via streamlit-autorefresh (in-place script rerun, not a
+full browser reload — so no flicker).
 """
 from __future__ import annotations
 
@@ -28,6 +29,7 @@ if str(_root) not in sys.path:
 
 import pandas as pd
 import streamlit as st
+from streamlit_autorefresh import st_autorefresh
 
 from app import db, metrics, settings  # noqa: E402
 
@@ -41,22 +43,23 @@ st.set_page_config(
 
 # ---------- helpers ----------
 
-STATUS_COLOR = {
-    "reserving": "gray",
-    "pending":   "blue",
-    "running":   "blue",
-    "blocked":   "orange",
-    "needs_attention": "orange",
-    "completed": "green",
-    "failed":    "red",
-    "timeout":   "red",
-    "cancelled": "gray",
+# Emoji prefix renders consistently in dataframe cells (st.column_config
+# doesn't parse the `:color-background[...]` markdown that st.markdown supports).
+STATUS_EMOJI = {
+    "reserving":       "⚪",
+    "pending":         "🔵",
+    "running":         "🔵",
+    "blocked":         "🟡",
+    "needs_attention": "🟡",
+    "completed":       "🟢",
+    "failed":          "🔴",
+    "timeout":         "🔴",
+    "cancelled":       "⚫",
 }
 
 
-def status_pill(status: str) -> str:
-    color = STATUS_COLOR.get(status, "gray")
-    return f":{color}-background[{status}]"
+def status_label(status: str) -> str:
+    return f"{STATUS_EMOJI.get(status, '⚪')} {status}"
 
 
 def fmt_link(url: str | None, label: str | None = None) -> str:
@@ -65,14 +68,20 @@ def fmt_link(url: str | None, label: str | None = None) -> str:
     return f"[{label or url}]({url})"
 
 
-def fmt_duration(start: str | None, end: str | None) -> str:
+def fmt_duration(start: str | None, end: str | None, status: str) -> str:
+    """Show elapsed time only for sessions that are genuinely running.
+    Terminal sessions without a completed_at are shown as '—' rather than
+    being mistakenly displayed as 'still running for 11 hours.'
+    """
     if not start:
+        return "—"
+    is_terminal = status in db.TERMINAL_STATUSES
+    if is_terminal and not end:
         return "—"
     try:
         start_ts = pd.to_datetime(start)
         end_ts = pd.to_datetime(end) if end else pd.Timestamp.now(tz=start_ts.tz)
-        delta = end_ts - start_ts
-        total_s = int(delta.total_seconds())
+        total_s = int((end_ts - start_ts).total_seconds())
         if total_s < 60:
             return f"{total_s}s"
         if total_s < 3600:
@@ -86,7 +95,7 @@ def fmt_duration(start: str | None, end: str | None) -> str:
 
 with st.sidebar:
     st.header("Controls")
-    refresh_secs = st.slider("Auto-refresh (sec)", 2, 60, 5)
+    refresh_secs = st.slider("Auto-refresh (sec)", 2, 60, 10)
     show_terminal = st.checkbox("Include terminal sessions", value=True)
     label_filter = st.multiselect(
         "Filter by label",
@@ -96,6 +105,12 @@ with st.sidebar:
     )
     st.caption(f"DB: `{db.DB_PATH}`")
     st.caption(f"Fork: `{settings.FORK_REPO}`")
+
+
+# Schedule the rerun BEFORE rendering — streamlit-autorefresh injects a JS
+# interval that calls st.rerun() without a browser navigation, so the page
+# state (scroll, selection, expanded panels) is preserved.
+st_autorefresh(interval=refresh_secs * 1000, key="dashboard-autorefresh")
 
 
 # ---------- data ----------
@@ -113,7 +128,7 @@ st.caption(
 )
 
 c1, c2, c3, c4, c5 = st.columns(5)
-c1.metric("Active", m["active_sessions"], help="reserving + pending + running + blocked")
+c1.metric("Active", m["active_sessions"], help="reserving + pending + running + blocked + needs_attention")
 c2.metric("PRs opened", m["pr_created"])
 c3.metric("Success rate",
           f"{int(m['success_rate'] * 100)}%" if m["pr_created"] or m["total_sessions"] else "—",
@@ -142,14 +157,14 @@ if label_filter:
 
 if rows:
     df = pd.DataFrame([{
-        "Status":   status_pill(r.status),
+        "Status":   status_label(r.status),
         "Trigger":  r.trigger_type,
         "Label":    r.label or "—",
-        "Issue":    fmt_link(r.trigger_ref, f"#{r.issue_number}" if r.issue_number else "link"),
-        "Devin":    fmt_link(r.devin_url, "session"),
-        "PR":       fmt_link(r.pr_url, "PR"),
+        "Issue":    r.trigger_ref or "",
+        "Devin":    r.devin_url or "",
+        "PR":       r.pr_url or "",
         "ACUs":     f"{r.acus_consumed:.2f}" if r.acus_consumed else "—",
-        "Duration": fmt_duration(r.started_at, r.completed_at),
+        "Duration": fmt_duration(r.started_at, r.completed_at, r.status),
         "Started":  r.started_at,
         "Detail":   (r.error_message or r.raw_status or "")[:60],
     } for r in rows])
@@ -158,10 +173,10 @@ if rows:
         use_container_width=True,
         hide_index=True,
         column_config={
+            "Status": st.column_config.TextColumn("Status", width="small"),
             "Issue":  st.column_config.LinkColumn("Issue", display_text=r"#(\d+)"),
             "Devin":  st.column_config.LinkColumn("Devin", display_text="open"),
             "PR":     st.column_config.LinkColumn("PR", display_text="open"),
-            "Status": st.column_config.TextColumn("Status"),
         },
     )
 else:
@@ -197,13 +212,3 @@ with st.expander("Routing labels in use", expanded=False):
         "quality":  settings.QUALITY_LABEL,
         "ci_fix":   settings.CI_FIX_LABEL,
     })
-
-
-# ---------- auto-refresh ----------
-
-# Trigger a rerun after the configured interval. Streamlit will re-execute
-# the whole script, picking up fresh DB state.
-st.markdown(
-    f"<meta http-equiv='refresh' content='{refresh_secs}'>",
-    unsafe_allow_html=True,
-)
