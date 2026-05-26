@@ -48,12 +48,23 @@ GitHub issue (label: devin-remediate + devin-security)
 gh repo fork apache/superset --clone=false
 gh api -X PATCH repos/<you>/superset -f has_issues=true   # forks inherit Apache's "issues disabled"
 
+# Clone your fork — needed for step 1b's workflow install
+git clone https://github.com/<you>/superset.git superset-fork
+
 # Install the Devin GitHub App on your fork:
 #   https://github.com/apps/devin-ai → Install → select <you>/superset
 # Generate a service-user token:
 #   app.devin.ai → Settings → Service Users → create → copy cog_*
 # Find your org id:
 #   app.devin.ai URL bar → org-*
+```
+
+### 1b. Install the nightly scanner + CI workflows into the fork
+
+```bash
+# Copies superset-fork-scripts/* into the fork's .github/, commits, and pushes.
+# Idempotent — re-runs are no-ops when nothing has changed.
+./scripts/install_fork_workflows.sh ./superset-fork
 ```
 
 ### 2. Configure `.env`
