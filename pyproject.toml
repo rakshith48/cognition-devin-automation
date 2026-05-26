@@ -12,11 +12,11 @@ dependencies = [
 
 [project.optional-dependencies]
 dashboard = [
+    # 1.40 brought st.fragment(run_every=...) out of experimental.
+    # That's the native in-place rerun mechanism; no external autorefresh
+    # component needed.
     "streamlit>=1.40",
     "pandas>=2.2",
-    # In-place rerun without a full browser reload — avoids the flicker
-    # that meta-refresh causes.
-    "streamlit-autorefresh>=1.0",
 ]
 dev = [
     "ruff>=0.7",
