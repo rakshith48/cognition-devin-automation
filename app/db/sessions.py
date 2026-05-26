@@ -183,6 +183,19 @@ def find_by_pr(pr_url: str) -> SessionRow | None:
         return SessionRow.from_row(r) if r else None
 
 
+def find_active_children(parent_devin_session_id: str) -> list[SessionRow]:
+    """Return child fix-sessions of this parent that are still active.
+    Used by the cap-hit escalation to terminate them and stop ACU burn."""
+    placeholders = ",".join("?" * len(ACTIVE_STATUSES))
+    with conn() as c:
+        cur = c.execute(
+            f"SELECT * FROM sessions WHERE parent_devin_session_id = ? "
+            f"AND status IN ({placeholders})",
+            (parent_devin_session_id, *ACTIVE_STATUSES),
+        )
+        return [SessionRow.from_row(r) for r in cur.fetchall()]
+
+
 def max_fix_attempt_for_parent(parent_devin_session_id: str) -> int:
     """Return the highest fix_attempt_number across the parent's chain
     (the parent itself plus any child fix-sessions it spawned). Used to

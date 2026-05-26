@@ -22,6 +22,75 @@ from app import db, devin, github_client, prompts, settings
 logger = logging.getLogger(__name__)
 
 
+def _escalate_to_human(parent, repo: str, pr_number: int, attempt_count: int) -> None:
+    """Cap-hit cleanup: stop in-flight work, surface to dashboard, notify
+    the PR. Idempotent — if the parent is already marked needs_attention
+    from a previous cap-hit webhook, this is a no-op (no duplicate PR
+    comments, no double-terminate calls)."""
+    if parent.status == "needs_attention":
+        logger.info("Escalation already done for parent %s — no-op", parent.devin_session_id)
+        return
+
+    logger.warning(
+        "CI-fix cap (%d) reached for PR #%d; escalating to human review",
+        attempt_count, pr_number,
+    )
+
+    # 1. Mark the parent visible in the dashboard's needs_human bucket.
+    db.sessions.update(
+        parent.id,
+        status="needs_attention",
+        error_message=(
+            f"CI-fix exhausted after {attempt_count} attempts — needs human review"
+        ),
+    )
+
+    # 2. Stop in-flight ACU burn by terminating any still-running children.
+    client = devin.factory.get_client()
+    for child in db.sessions.find_active_children(parent.devin_session_id):
+        if child.devin_session_id:
+            try:
+                client.terminate_session(child.devin_session_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Terminate failed for child %s: %s", child.devin_session_id, exc
+                )
+        db.sessions.update(
+            child.id, status="cancelled", error_message="cap_hit_on_parent"
+        )
+
+    # 3. Visible signal in the engineering team's review surface.
+    try:
+        github_client.post_pr_comment(repo, pr_number, _escalation_pr_comment(
+            repo=repo, pr_number=pr_number, attempt_count=attempt_count,
+            parent_devin_url=parent.devin_url,
+        ))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("PR comment failed for #%d: %s", pr_number, exc)
+
+
+def _escalation_pr_comment(
+    *, repo: str, pr_number: int, attempt_count: int, parent_devin_url: str | None
+) -> str:
+    parent_link = (
+        f"[Parent Devin session]({parent_devin_url})"
+        if parent_devin_url else "Parent session id missing"
+    )
+    return (
+        f"## :rotating_light: Devin Maintenance Orchestrator escalation\n\n"
+        f"CI-fix attempts exhausted after **{attempt_count}** tries. The "
+        f"most recent failing CI workflow continues to fail; the autonomous "
+        f"loop cannot resolve it.\n\n"
+        f"Active fix-sessions have been terminated to stop further ACU "
+        f"spend. **This PR needs human review.**\n\n"
+        f"- {parent_link}\n"
+        f"- Configured cap: `MAX_FIX_ATTEMPTS={attempt_count}`\n\n"
+        f"_If you fix this manually and want autonomous fixes to resume on a "
+        f"new failure, re-run the failing workflow — the orchestrator treats "
+        f"each `workflow_run.id` as a fresh chain start (subject to the cap)._"
+    )
+
+
 def _repo_full_name(issue: dict) -> str:
     """Extract owner/name from an issue payload. GitHub puts it in two places
     depending on the event; this handles both."""
@@ -158,7 +227,8 @@ def handle_ci_failure(workflow_run: dict) -> str:
     # using it directly would let attempts past 1 run indefinitely.
     current_max = db.sessions.max_fix_attempt_for_parent(parent.devin_session_id)
     if current_max >= settings.MAX_FIX_ATTEMPTS:
-        return f"skipped:max_fix_attempts:{current_max}"
+        _escalate_to_human(parent, repo, pr_number, current_max)
+        return f"escalated:max_fix_attempts:{current_max}"
     next_attempt = current_max + 1
 
     # Guard 6: don't fight a human. If someone pushed commits to the

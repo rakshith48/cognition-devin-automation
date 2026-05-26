@@ -97,6 +97,17 @@ def has_non_devin_commits(
     return False
 
 
+def post_pr_comment(repo: str, pr_number: int, body: str) -> None:
+    """Post a comment on a PR. Uses the issues endpoint because GitHub
+    treats PR-comments-on-conversation as issue comments (vs review
+    comments which attach to a diff line)."""
+    resp = _http().post(
+        f"/repos/{repo}/issues/{pr_number}/comments",
+        json={"body": body},
+    )
+    resp.raise_for_status()
+
+
 def get_workflow_run_failing_job_logs(
     repo: str, run_id: int, *, tail_lines: int = 200
 ) -> str:

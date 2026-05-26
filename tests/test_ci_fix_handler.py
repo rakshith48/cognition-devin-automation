@@ -18,6 +18,7 @@ class _StubDevin:
     def __init__(self, fail: bool = False) -> None:
         self.fail = fail
         self.calls: list[dict] = []
+        self.terminated: list[str] = []
 
     def create_session(self, **kwargs):
         self.calls.append(kwargs)
@@ -27,6 +28,9 @@ class _StubDevin:
             devin_session_id=f"devin-cifix-{len(self.calls)}",
             devin_url=f"https://app.devin.ai/sessions/devin-cifix-{len(self.calls)}",
         )
+
+    def terminate_session(self, devin_session_id: str) -> None:
+        self.terminated.append(devin_session_id)
 
 
 @pytest.fixture
@@ -52,6 +56,7 @@ def stub_github(monkeypatch):
         "pr": None,
         "commits": [],
         "logs": "fake log line\nanother line",
+        "comments_posted": [],   # list of (pr_number, body) tuples
     }
     from app import github_client as gc
 
@@ -61,17 +66,16 @@ def stub_github(monkeypatch):
     def _list_pr_commits(repo, number):
         return state["commits"]
 
-    def _has_non_devin(commits):
-        # Use the real function so we cover that logic, but reading the
-        # scripted commits list.
-        return gc.has_non_devin_commits(commits)
-
     def _get_logs(repo, run_id, *, tail_lines=200):
         return state["logs"]
+
+    def _post_comment(repo, pr_number, body):
+        state["comments_posted"].append((pr_number, body))
 
     monkeypatch.setattr(gc, "get_pr", _get_pr)
     monkeypatch.setattr(gc, "list_pr_commits", _list_pr_commits)
     monkeypatch.setattr(gc, "get_workflow_run_failing_job_logs", _get_logs)
+    monkeypatch.setattr(gc, "post_pr_comment", _post_comment)
     # has_non_devin_commits stays the real implementation
     return state
 
@@ -148,31 +152,90 @@ def test_no_tracked_session_skipped(stub_devin, stub_github):
     assert len(stub_devin.calls) == 0
 
 
-def test_max_fix_attempts_skipped(stub_devin, stub_github):
-    """Three strikes: a human takes over after fix_attempt 3.
-
-    Seeds a child session at the cap (not the parent — parent fix_attempt
-    is always 0). The chain query MAX(fix_attempt_number) across parent
-    + children should return the cap, and the handler should skip."""
+def test_max_fix_attempts_escalates_to_human(stub_devin, stub_github):
+    """When MAX_FIX_ATTEMPTS hits, the handler MUST:
+      1. Mark the parent CVE session as 'needs_attention' (visible in
+         the dashboard's needs_human bucket)
+      2. Terminate any active children on Devin's side (stop ACU burn)
+         and mark those rows cancelled
+      3. Post an escalation comment on the PR (signal to humans in
+         their normal review surface)
+      4. NOT spawn a new Devin session
+    """
     from app import db, handlers, settings
     pr_url = "https://x/owner/repo/pull/42"
     stub_github["pr"] = {"html_url": pr_url, "head": {"ref": "devin/cve-x"}}
     stub_github["commits"] = [
         {"committer": {"login": "devin-ai-integration[bot]"}, "author": {}},
     ]
-    _seed_parent_session("owner/repo", pr_url, devin_id="devin-parent-cap")
-    # Simulate that MAX_FIX_ATTEMPTS child fix-sessions have already run.
-    db.sessions.try_reserve(
-        work_key="ci_fix:owner/repo:88",  # arbitrary historical run id
-        trigger_type="ci_failure",
-        trigger_ref=pr_url,
-        issue_number=42,
-        label="devin-ci-fix",
+    parent_pk = _seed_parent_session("owner/repo", pr_url, devin_id="devin-parent-cap")
+
+    # Three prior children, the latest at the cap and still running.
+    child_pk = db.sessions.try_reserve(
+        work_key="ci_fix:owner/repo:88",
+        trigger_type="ci_failure", trigger_ref=pr_url,
+        issue_number=42, label="devin-ci-fix",
         parent_devin_session_id="devin-parent-cap",
         fix_attempt_number=settings.MAX_FIX_ATTEMPTS,
     )
+    db.sessions.update(
+        child_pk,
+        devin_session_id="devin-child-still-running",
+        devin_url="https://app.devin.ai/sessions/devin-child-still-running",
+        status="running",
+    )
+
     res = handlers.handle_ci_failure(_wf_run())
-    assert res.startswith("skipped:max_fix_attempts")
+
+    assert res.startswith("escalated:max_fix_attempts"), res
+    assert len(stub_devin.calls) == 0, "Cap reached — no new session allowed"
+
+    # Parent now visible in needs_human bucket
+    parent_row = db.sessions.get(parent_pk)
+    assert parent_row.status == "needs_attention"
+    assert "exhausted after 3" in (parent_row.error_message or "")
+
+    # Active child got terminated AND marked cancelled
+    assert "devin-child-still-running" in stub_devin.terminated
+    child_row = db.sessions.get(child_pk)
+    assert child_row.status == "cancelled"
+    assert child_row.error_message == "cap_hit_on_parent"
+
+    # PR comment posted with the right metadata
+    assert len(stub_github["comments_posted"]) == 1
+    pr_n, body = stub_github["comments_posted"][0]
+    assert pr_n == 42
+    assert "escalation" in body.lower()
+    assert "needs human review" in body.lower()
+
+
+def test_escalation_is_idempotent_on_repeated_webhooks(stub_devin, stub_github):
+    """If the cap-hit webhook arrives a SECOND time (e.g. GitHub redelivery
+    or another failing workflow_run after escalation), don't post a
+    duplicate PR comment or re-terminate."""
+    from app import db, handlers, settings
+    pr_url = "https://x/owner/repo/pull/42"
+    stub_github["pr"] = {"html_url": pr_url, "head": {"ref": "devin/cve-x"}}
+    stub_github["commits"] = [
+        {"committer": {"login": "devin-ai-integration[bot]"}, "author": {}},
+    ]
+    _seed_parent_session("owner/repo", pr_url, devin_id="devin-parent-idem")
+    db.sessions.try_reserve(
+        work_key="ci_fix:owner/repo:99",
+        trigger_type="ci_failure", trigger_ref=pr_url,
+        issue_number=42, label="devin-ci-fix",
+        parent_devin_session_id="devin-parent-idem",
+        fix_attempt_number=settings.MAX_FIX_ATTEMPTS,
+    )
+
+    # First cap-hit webhook: should escalate.
+    handlers.handle_ci_failure(_wf_run(run_id=2001))
+    assert len(stub_github["comments_posted"]) == 1
+
+    # Second cap-hit webhook (different run_id, same parent chain at cap).
+    handlers.handle_ci_failure(_wf_run(run_id=2002))
+    # NO second comment, NO double-terminate, NO extra Devin calls.
+    assert len(stub_github["comments_posted"]) == 1
     assert len(stub_devin.calls) == 0
 
 
@@ -203,9 +266,9 @@ def test_fix_attempt_counter_walks_the_chain(stub_devin, stub_github):
     assert [c.fix_attempt_number for c in children] == [1, 2, 3], \
         f"Expected 1,2,3 — got {[c.fix_attempt_number for c in children]}"
 
-    # The 4th failure must be blocked by the cap.
+    # The 4th failure must be blocked by the cap (and trigger escalation).
     res = handlers.handle_ci_failure(_wf_run(run_id=1004))
-    assert res == "skipped:max_fix_attempts:3"
+    assert res == "escalated:max_fix_attempts:3"
     assert len(stub_devin.calls) == 3, "No new Devin call on the 4th failure"
 
 
