@@ -91,7 +91,7 @@ def main() -> int:
     print(f"→ Fetching {repo}#{args.issue_number} from GitHub...")
     issue = fetch_issue(repo, args.issue_number, token)
     print(f"  title: {issue.get('title')}")
-    print(f"  labels: {[l['name'] for l in issue.get('labels', [])]}")
+    print(f"  labels: {[lbl['name'] for lbl in issue.get('labels', [])]}")
 
     payload = {"action": "opened", "issue": issue}
     import time

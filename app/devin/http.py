@@ -45,7 +45,7 @@ class DevinTransport:
     def close(self) -> None:
         self._client.close()
 
-    def __enter__(self) -> "DevinTransport":
+    def __enter__(self) -> DevinTransport:
         return self
 
     def __exit__(self, *_exc) -> None:

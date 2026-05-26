@@ -42,8 +42,7 @@ def osv_batch(pkgs: list[tuple[str, str]]) -> list[dict]:
 
 
 def osv_details(vuln_id: str) -> dict:
-    body = json.dumps({"id": vuln_id}).encode()
-    # OSV's /v1/vulns/{id} GET also works; using POST query for batching parity.
+    # OSV exposes a GET for individual vuln lookup — no body needed.
     with urlopen(f"https://api.osv.dev/v1/vulns/{vuln_id}", timeout=30) as resp:
         return json.loads(resp.read())
 
@@ -75,7 +74,7 @@ def main(req_path: str) -> int:
 
     results = osv_batch(pkgs)
     findings = []
-    for (name, version), result in zip(pkgs, results):
+    for (name, version), result in zip(pkgs, results, strict=True):
         for vuln_stub in result.get("vulns", []):
             vid = vuln_stub["id"]
             vuln = osv_details(vid)

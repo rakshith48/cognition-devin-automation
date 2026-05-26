@@ -61,7 +61,7 @@ class SessionDetails:
         return self.pull_requests[0].pr_url if self.pull_requests else None
 
     @classmethod
-    def from_api_response(cls, data: dict) -> "SessionDetails":
+    def from_api_response(cls, data: dict) -> SessionDetails:
         raw_status = data.get("status") or "unknown"
         prs = [
             PullRequestRef(pr_url=p["pr_url"], pr_state=p.get("pr_state"))

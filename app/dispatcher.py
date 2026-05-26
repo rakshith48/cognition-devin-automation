@@ -28,7 +28,7 @@ def _dispatch_issue(action: str | None, payload: dict) -> str:
     if action not in ("opened", "labeled", "reopened"):
         return f"skipped:issue_action:{action}"
     issue = payload.get("issue") or {}
-    label_names = {l.get("name") for l in (issue.get("labels") or []) if l.get("name")}
+    label_names = {lbl.get("name") for lbl in (issue.get("labels") or []) if lbl.get("name")}
 
     if settings.GATE_LABEL not in label_names:
         return "skipped:no_gate_label"

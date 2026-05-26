@@ -42,7 +42,7 @@ async def lifespan(_app: FastAPI):
         if poller_task is not None:
             try:
                 await asyncio.wait_for(poller_task, timeout=5.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 poller_task.cancel()
         devin.factory.reset()
         # GitHub client uses the same singleton pattern — release its sockets too.

@@ -13,7 +13,6 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-
 _PLACEHOLDER_VERSIONS = {"latest", "unknown", "", "n/a", "tbd"}
 
 

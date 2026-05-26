@@ -70,6 +70,7 @@ def test_make_work_key_format():
 def test_update_rejects_unknown_columns(db_path):
     """SQL-injection defense: column allow-list refuses unknown kwargs."""
     import pytest
+
     from app import db
     pk = db.sessions.try_reserve(
         work_key="k", trigger_type="cve_issue", trigger_ref="r", label="x",

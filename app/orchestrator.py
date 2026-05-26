@@ -22,7 +22,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from app import db, devin, settings
 
@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _seconds_since(iso_or_sqlite: str) -> float:
@@ -42,8 +42,8 @@ def _seconds_since(iso_or_sqlite: str) -> float:
     except ValueError:
         return 0.0
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return (datetime.now(timezone.utc) - dt).total_seconds()
+        dt = dt.replace(tzinfo=UTC)
+    return (datetime.now(UTC) - dt).total_seconds()
 
 
 def poll_once() -> dict:
@@ -75,10 +75,10 @@ def poll_once() -> dict:
         # a Unix epoch int. Falls back to local started_at if absent.
         if remote.status in {"pending", "running"}:
             if remote.updated_at:
-                from datetime import datetime, timezone as _tz
+                from datetime import datetime
                 inactivity = (
-                    datetime.now(_tz.utc)
-                    - datetime.fromtimestamp(remote.updated_at, tz=_tz.utc)
+                    datetime.now(UTC)
+                    - datetime.fromtimestamp(remote.updated_at, tz=UTC)
                 ).total_seconds()
             else:
                 inactivity = _seconds_since(row.last_polled_at or row.started_at)
@@ -151,6 +151,6 @@ async def run_loop(stop_event: asyncio.Event) -> None:
             logger.exception("Poller tick crashed (continuing)")
         try:
             await asyncio.wait_for(stop_event.wait(), timeout=settings.POLL_INTERVAL_SECONDS)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pass
     logger.info("Poller stopped")

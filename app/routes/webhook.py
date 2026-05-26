@@ -46,8 +46,8 @@ async def github_webhook(
 
     try:
         payload = json.loads(body)
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=400, detail="invalid JSON body")
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail="invalid JSON body") from exc
 
     action = payload.get("action")
     is_new = db.webhook_events.record(x_github_delivery, x_github_event, action, payload)

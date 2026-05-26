@@ -5,7 +5,6 @@ from __future__ import annotations
 from app.devin.types import (
     STATUS_MAP,
     UNKNOWN_STATUS,
-    PullRequestRef,
     SessionDetails,
     map_status,
 )

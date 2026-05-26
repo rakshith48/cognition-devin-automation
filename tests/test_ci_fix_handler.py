@@ -160,7 +160,7 @@ def test_max_fix_attempts_skipped(stub_devin, stub_github):
     stub_github["commits"] = [
         {"committer": {"login": "devin-ai-integration[bot]"}, "author": {}},
     ]
-    parent_pk = _seed_parent_session("owner/repo", pr_url, devin_id="devin-parent-cap")
+    _seed_parent_session("owner/repo", pr_url, devin_id="devin-parent-cap")
     # Simulate that MAX_FIX_ATTEMPTS child fix-sessions have already run.
     db.sessions.try_reserve(
         work_key="ci_fix:owner/repo:88",  # arbitrary historical run id

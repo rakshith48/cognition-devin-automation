@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
+from datetime import UTC
 from typing import Any
 
 from app.db.connection import conn
@@ -57,7 +58,7 @@ class SessionRow:
     fix_attempt_number: int
 
     @classmethod
-    def from_row(cls, r: sqlite3.Row) -> "SessionRow":
+    def from_row(cls, r: sqlite3.Row) -> SessionRow:
         return cls(**{k: r[k] for k in r.keys()})
 
 
@@ -209,5 +210,5 @@ def list_recent(limit: int = 100) -> list[SessionRow]:
 
 
 def _now_iso() -> str:
-    from datetime import datetime, timezone
-    return datetime.now(timezone.utc).isoformat()
+    from datetime import datetime
+    return datetime.now(UTC).isoformat()

@@ -30,8 +30,8 @@ _root = Path(__file__).resolve().parent.parent
 if str(_root) not in sys.path:
     sys.path.insert(0, str(_root))
 
-import pandas as pd
-import streamlit as st
+import pandas as pd  # noqa: E402
+import streamlit as st  # noqa: E402
 
 from app import db, metrics, settings  # noqa: E402
 
@@ -134,13 +134,22 @@ def live_section():
         "Eng-hours saved",
         f"{int(m['estimated_hours_saved'])}",
         delta=f"≈ ${m['estimated_dollars_saved']:,}",
-        help=f"{settings.HOURS_SAVED_PER_COMPLETED_SESSION}h × ${settings.ENGINEER_HOURLY_RATE_USD}/h × PRs created",
+        help=(
+            f"{settings.HOURS_SAVED_PER_COMPLETED_SESSION}h"
+            f" × ${settings.ENGINEER_HOURLY_RATE_USD}/h × PRs created"
+        ),
     )
 
     if m["needs_human"]:
-        st.warning(f":construction: {m['needs_human']} session(s) need a human — check the table below.")
+        st.warning(
+            f":construction: {m['needs_human']} session(s) need a human — "
+            "check the table below."
+        )
     if m["completed_without_pr"]:
-        st.info(f":information_source: {m['completed_without_pr']} session(s) finished without opening a PR.")
+        st.info(
+            f":information_source: {m['completed_without_pr']} session(s) "
+            "finished without opening a PR."
+        )
 
     # ----- sessions table -----
     st.subheader("Sessions")
