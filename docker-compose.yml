@@ -1,0 +1,69 @@
+# Two services from one image. Sharing a docker-managed volume for SQLite is
+# the cleanest cross-service state pattern at this scale — single-host, single
+# writer per row, WAL mode handles the concurrent reads from the dashboard.
+#
+# Both services depend on the .env file. Mount it via env_file so secrets stay
+# out of the compose file and out of image layers.
+services:
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: devin-orchestrator:latest
+    container_name: devin-orchestrator-api
+    env_file:
+      - .env
+    environment:
+      # Force the in-container DB path. Override of any host-side default.
+      DB_PATH: /data/automation.db
+    volumes:
+      - automation-data:/data
+    ports:
+      # API + webhook receiver. Ngrok or your reverse proxy should point here.
+      - "8000:8000"
+    command: >
+      uvicorn app.main:app
+      --host 0.0.0.0
+      --port 8000
+      --workers 1
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz', timeout=2)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  dashboard:
+    image: devin-orchestrator:latest
+    container_name: devin-orchestrator-dashboard
+    env_file:
+      - .env
+    environment:
+      DB_PATH: /data/automation.db
+    volumes:
+      # Shared volume — dashboard reads what api writes.
+      - automation-data:/data
+    ports:
+      - "8502:8501"
+    command: >
+      streamlit run dashboard/app.py
+      --server.headless true
+      --server.port 8501
+      --server.address 0.0.0.0
+      --browser.gatherUsageStats false
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health', timeout=2)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    depends_on:
+      api:
+        condition: service_started   # api creates the schema first
+    restart: unless-stopped
+
+volumes:
+  automation-data:
+    name: devin-orchestrator-data
