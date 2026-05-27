@@ -389,6 +389,5 @@ This take-home demonstrates the spine. In a real Stripe/Ramp engagement you'd ex
 - **Orchestrator repo (this code):** https://github.com/rakshith48/cognition-devin-automation
 - **Superset fork (with our workflows installed):** https://github.com/rakshith48/superset
 - **Proof artifact — real merged PR by Devin:** https://github.com/rakshith48/superset/pull/11
-- **Loom walkthrough:** *(recording link)*
 
 Built by Rakshith Ramprakash for Cognition's Deployment Engineer take-home, May 2026.
