@@ -48,6 +48,24 @@ def test_active_sessions_excluded_from_success_rate():
     assert m["active_sessions"] == 1
 
 
+def test_active_session_with_pr_does_not_blow_success_rate_past_100():
+    """Regression: an active session (e.g. needs_attention) that opened a
+    PR used to inflate the success_rate numerator without inflating the
+    terminal denominator — producing values like 200%. Numerator must be
+    a subset of denominator."""
+    from app import metrics
+    rows = [
+        # Terminal + PR: real success.
+        _make_row(id=1, status="completed", pr_url="https://x/pull/1"),
+        # Still active (needs_attention), has a PR open — does NOT count.
+        _make_row(id=2, status="needs_attention", pr_url="https://x/pull/2"),
+    ]
+    m = metrics.compute_dashboard_metrics(rows)
+    assert m["pr_created"] == 2, "lifetime PR count includes both"
+    assert m["success_rate"] == 1.0, "success rate stays bounded at 100%"
+    assert m["success_rate"] <= 1.0
+
+
 def test_needs_human_bucket():
     """blocked / needs_attention / timeout all need a human."""
     from app import metrics

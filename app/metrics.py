@@ -27,6 +27,8 @@ def compute_dashboard_metrics(rows: list[db.SessionRow]) -> dict:
     needs_human = sum(1 for r in rows if r.status in NEEDS_HUMAN_STATUSES)
 
     # Output buckets — what work product came out.
+    # pr_created is a LIFETIME count: every session that ever opened a PR,
+    # including sessions still active.
     pr_created = sum(1 for r in rows if r.pr_url)
     # "Devin said done, but no PR" — usually a no-op or a "couldn't proceed"
     # finish that the dashboard should flag.
@@ -37,13 +39,18 @@ def compute_dashboard_metrics(rows: list[db.SessionRow]) -> dict:
     # Cost.
     total_acus = sum((r.acus_consumed or 0) for r in rows)
 
-    # Honest success rate: only PR-producing completions count as success.
-    # Denominator is sessions that have reached a terminal state.
+    # Honest success rate: of sessions that have reached a TERMINAL state,
+    # what fraction produced a PR? Numerator must be a subset of denominator,
+    # so we count "terminal AND has PR" — not the lifetime pr_created
+    # (which includes active sessions like needs_attention with an open PR).
     terminal = sum(1 for r in rows if r.status in db.TERMINAL_STATUSES)
-    success_rate = (pr_created / terminal) if terminal else 0.0
+    successful_terminal = sum(
+        1 for r in rows if r.status in db.TERMINAL_STATUSES and r.pr_url
+    )
+    success_rate = (successful_terminal / terminal) if terminal else 0.0
 
     # Engineering value (calibrated estimate; see settings for the constants).
-    hours_saved = pr_created * settings.HOURS_SAVED_PER_COMPLETED_SESSION
+    hours_saved = successful_terminal * settings.HOURS_SAVED_PER_COMPLETED_SESSION
 
     # Per-label breakdown so the dashboard can show "5 security, 2 quality."
     by_label: dict[str, int] = {}
